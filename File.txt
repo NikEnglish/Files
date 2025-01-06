@@ -13,10 +13,10 @@ if not cap.isOpened():
     print("Не удалось подключиться к камере.")
     exit()
 
-# Основная логика для обнаружения углов
+# Функция для поиска углов (контуров) на изображении
 def find_corners(frame):
     """
-    Ищем углы/границы поля с помощью метода Canny для детекции краёв и потом corners.
+    Ищем границы поля (по контурной линии) и определяем углы поля.
     """
     # Преобразуем в черно-белое изображение для упрощения обработки
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
@@ -24,25 +24,35 @@ def find_corners(frame):
     # Применяем детектор краёв Canny
     edges = cv2.Canny(gray, 50, 150, apertureSize=3)
 
-    # Находим линии на изображении (используем преобразование Хафа)
-    lines = cv2.HoughLinesP(edges, 1, np.pi / 180, 50, minLineLength=100, maxLineGap=10)
+    # Находим контуры на изображении
+    contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
-    # Рисуем линии на изображении для отладки
-    if lines is not None:
-        for line in lines:
-            x1, y1, x2, y2 = line[0]
-            cv2.line(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+    # Для отладки можем рисовать контуры
+    frame_copy = frame.copy()
+    cv2.drawContours(frame_copy, contours, -1, (0, 255, 0), 3)
 
-    # Ищем углы через Harris или другие методы, если нужно более точно
-    # Для простоты выводим 4 угла в виде точек (к примеру)
-    return [(100, 100), (1800, 100), (1800, 1100), (100, 1100)]  # Здесь можно ввести любую коррекцию
+    # Теперь находим углы этого контура
+    if len(contours) > 0:
+        # Предполагаем, что первый контур это поле, и находим его углы
+        epsilon = 0.02 * cv2.arcLength(contours[0], True)
+        approx = cv2.approxPolyDP(contours[0], epsilon, True)
+        
+        # Если мы нашли больше 4-х точек, значит это не прямоугольник
+        if len(approx) == 4:
+            corners = approx  # Найденные углы
+        else:
+            corners = []
+    else:
+        corners = []
+    
+    return corners, frame_copy
 
 def draw_corners(frame, corners):
     """
-    Отображаем найденные углы на экране (проектор).
+    Отображаем найденные углы на изображении.
     """
     for corner in corners:
-        cv2.circle(frame, corner, 10, (0, 0, 255), -1)  # Красные точки на углах
+        cv2.circle(frame, tuple(corner[0]), 10, (0, 0, 255), -1)  # Красные точки на углах
 
 def calibrate():
     """
@@ -55,17 +65,14 @@ def calibrate():
         
         frame = cv2.resize(frame, (PROJECTION_WIDTH, PROJECTION_HEIGHT))
 
-        # Чёрный фон и поиск углов
-        black_image = np.zeros((PROJECTION_HEIGHT, PROJECTION_WIDTH, 3), dtype=np.uint8)
+        # Поиск контуров и углов
+        corners, debug_frame = find_corners(frame)
 
-        # Находим углы
-        corners = find_corners(frame)
-        
-        # Отображаем эти углы на чёрном фоне
-        draw_corners(black_image, corners)
+        # Для отладки рисуем контуры и углы на экране
+        draw_corners(debug_frame, corners)
 
-        # Выводим изображения на проектор
-        cv2.imshow("Проектор - Калибровка", black_image)
+        # Выводим изображение для отладки
+        cv2.imshow("Проектор - Калибровка", debug_frame)
 
         key = cv2.waitKey(1) & 0xFF
         if key == ord('q'):  # Нажать q для выхода
