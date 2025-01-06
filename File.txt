@@ -1,137 +1,58 @@
-import tkinter as tk
-from tkinter import simpledialog, filedialog, messagebox
 import cv2
 import numpy as np
-from PIL import Image, ImageTk
 
-# Конфигурация камеры
-IP_CAMERA = "http://192.168.31.40:4747/video"
+# Настройки камеры и размера экрана
+CAMERA_IP = "http://192.168.31.40:4747/video"
+PROJECTION_WIDTH = 1920
+PROJECTION_HEIGHT = 1200
 
-# Глобальные переменные
-corners = [[100, 100], [1820, 100], [1820, 1080], [100, 1080]]  # начальные углы
-street_data = {}  # для хранения названий улиц и их координат
+# Инициализация видеопотока камеры
+cap = cv2.VideoCapture(CAMERA_IP)
 
-# Обработчики событий
-def move_corner(index, dx, dy):
-    corners[index][0] += dx
-    corners[index][1] += dy
-    redraw_canvas()
+if not cap.isOpened():
+    print("Не удалось подключиться к камере.")
+    exit()
 
-def confirm_corners():
-    global street_data
-    street_data = detect_regions()
-    if not street_data:
-        messagebox.showerror("Ошибка", "Не удалось распознать регионы.")
-        return
-    messagebox.showinfo("Успех", "Калибровка углов завершена!")
-    input_streets()
+# Калибровочные точки для отображения на проекторе
+# (это пример, точки нужно будет распознать вручную по ходу теста)
+calibration_points = [(100, 100), (1800, 100), (1800, 1100), (100, 1100)]
 
-def detect_regions():
-    """Разделяет поле на улицы и возвращает регионы."""
-    width = corners[1][0] - corners[0][0]
-    height = corners[3][1] - corners[0][1]
-    rows, cols = 10, 10  # Можно изменить по количеству улиц
-    regions = {}
-    for r in range(rows):
-        for c in range(cols):
-            x1 = corners[0][0] + int(c * width / cols)
-            y1 = corners[0][1] + int(r * height / rows)
-            x2 = corners[0][0] + int((c + 1) * width / cols)
-            y2 = corners[0][1] + int((r + 1) * height / rows)
-            regions[(r, c)] = ((x1, y1), (x2, y2))
-    return regions
+def draw_calibration_points(image):
+    """
+    Отображаем калибровочные точки на изображении.
+    """
+    for point in calibration_points:
+        cv2.circle(image, point, 10, (0, 255, 0), -1)  # Рисуем зелёную точку
 
-def input_streets():
-    """Открывает окно для ввода данных об улицах."""
-    global street_data
-    for (r, c), ((x1, y1), (x2, y2)) in street_data.items():
-        region_name = simpledialog.askstring("Введите название", f"Улица ({r}, {c}):")
-        if not region_name:
-            messagebox.showerror("Ошибка", "Название не может быть пустым.")
-            return
-        street_data[(r, c)] = {"name": region_name, "coords": ((x1, y1), (x2, y2))}
-    save_data()
+def calibrate():
+    """
+    Основная логика калибровки.
+    """
+    while True:
+        ret, frame = cap.read()
+        if not ret:
+            break
 
-def save_data():
-    """Сохраняет данные улиц в файл."""
-    file_path = filedialog.asksaveasfilename(defaultextension=".json", filetypes=[("JSON файлы", "*.json")])
-    if not file_path:
-        return
-    with open(file_path, "w") as f:
-        json.dump(street_data, f, indent=4)
-    messagebox.showinfo("Успех", f"Данные сохранены в {file_path}")
+        frame = cv2.resize(frame, (PROJECTION_WIDTH, PROJECTION_HEIGHT))
 
-def redraw_canvas():
-    """Обновляет отображение на canvas."""
-    frame = capture_frame()
-    for i in range(4):
-        cv2.circle(frame, tuple(corners[i]), 10, (0, 255, 0), -1)
-        cv2.line(frame, tuple(corners[i]), tuple(corners[(i + 1) % 4]), (0, 255, 0), 2)
-    draw_frame(frame)
+        # Чёрный фон и вывод точек
+        black_image = np.zeros((PROJECTION_HEIGHT, PROJECTION_WIDTH, 3), dtype=np.uint8)
 
-def capture_frame():
-    """Получает текущий кадр с камеры."""
-    ret, frame = cap.read()
-    if not ret:
-        raise RuntimeError("Не удаётся подключиться к камере.")
-    frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-    return frame
+        draw_calibration_points(black_image)  # Отображаем калибровочные точки
 
-def draw_frame(frame):
-    """Рисует кадр на tkinter Canvas."""
-    frame = Image.fromarray(frame)
-    frame = ImageTk.PhotoImage(frame)
-    canvas.imgtk = frame
-    canvas.create_image(0, 0, anchor=tk.NW, image=frame)
+        # Отображаем изображения на экране компьютера
+        cv2.imshow("Проектор - Калибровка", black_image)
 
-# Главная программа
-cap = cv2.VideoCapture(IP_CAMERA)
+        key = cv2.waitKey(1) & 0xFF
 
-# Интерфейс Tkinter
-root = tk.Tk()
-root.title("Калибровка поля")
-root.geometry("1920x1200")
+        if key == ord('q'):  # Если нажать 'q' - выйти из цикла
+            break
+        if key == ord('r'):  # Если нажать 'r' - повторить калибровку
+            print("Перезапуск калибровки.")
+            continue
 
-canvas = tk.Canvas(root, width=1920, height=1200, bg="black")
-canvas.pack()
+    cap.release()
+    cv2.destroyAllWindows()
 
-control_frame = tk.Frame(root)
-control_frame.pack(fill=tk.X)
-
-# Кнопки управления
-btn_up = tk.Button(control_frame, text="↑", command=lambda: move_corner(selected_corner.get(), 0, -10))
-btn_up.grid(row=0, column=1)
-
-btn_left = tk.Button(control_frame, text="←", command=lambda: move_corner(selected_corner.get(), -10, 0))
-btn_left.grid(row=1, column=0)
-
-btn_right = tk.Button(control_frame, text="→", command=lambda: move_corner(selected_corner.get(), 10, 0))
-btn_right.grid(row=1, column=2)
-
-btn_down = tk.Button(control_frame, text="↓", command=lambda: move_corner(selected_corner.get(), 0, 10))
-btn_down.grid(row=2, column=1)
-
-btn_confirm = tk.Button(control_frame, text="Подтвердить", command=confirm_corners)
-btn_confirm.grid(row=1, column=4)
-
-# Выбор угла
-selected_corner = tk.IntVar(value=0)
-corner_select = tk.Frame(control_frame)
-corner_select.grid(row=0, column=3, rowspan=3)
-
-for i in range(4):
-    rb = tk.Radiobutton(corner_select, text=f"Угол {i + 1}", variable=selected_corner, value=i)
-    rb.pack(anchor="w")
-
-# Цикл обновления окна
-def update():
-    try:
-        redraw_canvas()
-    except Exception as e:
-        messagebox.showerror("Ошибка", f"Не удаётся захватить кадр: {e}")
-    root.after(30, update)
-
-update()
-root.mainloop()
-
-cap.release()
+if __name__ == "__main__":
+    calibrate()
