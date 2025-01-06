@@ -1,146 +1,137 @@
+import tkinter as tk
+from tkinter import simpledialog, filedialog, messagebox
 import cv2
 import numpy as np
-import json
-import os
+from PIL import Image, ImageTk
 
-# Параметры
-CAMERA_URL = "http://192.168.31.40:4747/video"  # URL IP-камеры
-PROJECTOR_RESOLUTION = (1920, 1200)  # Разрешение проектора
-TARGET_SIZE = 800  # Размер внутреннего поля
-CONFIG_FILE = "board_config.json"
+# Конфигурация камеры
+IP_CAMERA = "http://192.168.31.40:4747/video"
 
-camera = cv2.VideoCapture(CAMERA_URL)
+# Глобальные переменные
+corners = [[100, 100], [1820, 100], [1820, 1080], [100, 1080]]  # начальные углы
+street_data = {}  # для хранения названий улиц и их координат
 
+# Обработчики событий
+def move_corner(index, dx, dy):
+    corners[index][0] += dx
+    corners[index][1] += dy
+    redraw_canvas()
 
-def save_config(data):
-    """Сохранение конфигурации в файл."""
-    with open(CONFIG_FILE, "w") as f:
-        json.dump(data, f)
-    print("Конфигурация сохранена.")
+def confirm_corners():
+    global street_data
+    street_data = detect_regions()
+    if not street_data:
+        messagebox.showerror("Ошибка", "Не удалось распознать регионы.")
+        return
+    messagebox.showinfo("Успех", "Калибровка углов завершена!")
+    input_streets()
 
+def detect_regions():
+    """Разделяет поле на улицы и возвращает регионы."""
+    width = corners[1][0] - corners[0][0]
+    height = corners[3][1] - corners[0][1]
+    rows, cols = 10, 10  # Можно изменить по количеству улиц
+    regions = {}
+    for r in range(rows):
+        for c in range(cols):
+            x1 = corners[0][0] + int(c * width / cols)
+            y1 = corners[0][1] + int(r * height / rows)
+            x2 = corners[0][0] + int((c + 1) * width / cols)
+            y2 = corners[0][1] + int((r + 1) * height / rows)
+            regions[(r, c)] = ((x1, y1), (x2, y2))
+    return regions
 
-def load_config():
-    """Загрузка конфигурации из файла."""
-    if os.path.exists(CONFIG_FILE):
-        with open(CONFIG_FILE, "r") as f:
-            return json.load(f)
-    return None
+def input_streets():
+    """Открывает окно для ввода данных об улицах."""
+    global street_data
+    for (r, c), ((x1, y1), (x2, y2)) in street_data.items():
+        region_name = simpledialog.askstring("Введите название", f"Улица ({r}, {c}):")
+        if not region_name:
+            messagebox.showerror("Ошибка", "Название не может быть пустым.")
+            return
+        street_data[(r, c)] = {"name": region_name, "coords": ((x1, y1), (x2, y2))}
+    save_data()
 
+def save_data():
+    """Сохраняет данные улиц в файл."""
+    file_path = filedialog.asksaveasfilename(defaultextension=".json", filetypes=[("JSON файлы", "*.json")])
+    if not file_path:
+        return
+    with open(file_path, "w") as f:
+        json.dump(street_data, f, indent=4)
+    messagebox.showinfo("Успех", f"Данные сохранены в {file_path}")
 
-def find_board_edges(frame):
-    """Автоматическое нахождение углов игрового поля."""
-    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-    blurred = cv2.GaussianBlur(gray, (5, 5), 0)
-    _, thresh = cv2.threshold(blurred, 200, 255, cv2.THRESH_BINARY)
+def redraw_canvas():
+    """Обновляет отображение на canvas."""
+    frame = capture_frame()
+    for i in range(4):
+        cv2.circle(frame, tuple(corners[i]), 10, (0, 255, 0), -1)
+        cv2.line(frame, tuple(corners[i]), tuple(corners[(i + 1) % 4]), (0, 255, 0), 2)
+    draw_frame(frame)
 
-    contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    largest_contour = max(contours, key=cv2.contourArea, default=None)
+def capture_frame():
+    """Получает текущий кадр с камеры."""
+    ret, frame = cap.read()
+    if not ret:
+        raise RuntimeError("Не удаётся подключиться к камере.")
+    frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+    return frame
 
-    if largest_contour is not None:
-        approx = cv2.approxPolyDP(largest_contour, 0.02 * cv2.arcLength(largest_contour, True), True)
-        if len(approx) == 4:
-            return np.array(sorted(np.squeeze(approx), key=lambda x: (x[1], x[0])))
-    return None
+def draw_frame(frame):
+    """Рисует кадр на tkinter Canvas."""
+    frame = Image.fromarray(frame)
+    frame = ImageTk.PhotoImage(frame)
+    canvas.imgtk = frame
+    canvas.create_image(0, 0, anchor=tk.NW, image=frame)
 
+# Главная программа
+cap = cv2.VideoCapture(IP_CAMERA)
 
-def warp_board(frame, points):
-    """Перспективная трансформация игрового поля."""
-    destination = np.array(
-        [[0, 0], [TARGET_SIZE, 0], [TARGET_SIZE, TARGET_SIZE], [0, TARGET_SIZE]],
-        dtype="float32",
-    )
-    transform_matrix = cv2.getPerspectiveTransform(points, destination)
-    return cv2.warpPerspective(frame, transform_matrix, (TARGET_SIZE, TARGET_SIZE)), transform_matrix
+# Интерфейс Tkinter
+root = tk.Tk()
+root.title("Калибровка поля")
+root.geometry("1920x1200")
 
+canvas = tk.Canvas(root, width=1920, height=1200, bg="black")
+canvas.pack()
 
-def render_projector_display(warped_field, street_names, points):
-    """Отображение изображения на проекторе."""
-    display = np.zeros((PROJECTOR_RESOLUTION[1], PROJECTOR_RESOLUTION[0], 3), dtype=np.uint8)
+control_frame = tk.Frame(root)
+control_frame.pack(fill=tk.X)
 
-    if warped_field is not None:
-        # Вставка игрового поля на центр
-        x_offset = (PROJECTOR_RESOLUTION[0] - TARGET_SIZE) // 2
-        y_offset = (PROJECTOR_RESOLUTION[1] - TARGET_SIZE) // 2
-        display[y_offset:y_offset + TARGET_SIZE, x_offset:x_offset + TARGET_SIZE] = warped_field
+# Кнопки управления
+btn_up = tk.Button(control_frame, text="↑", command=lambda: move_corner(selected_corner.get(), 0, -10))
+btn_up.grid(row=0, column=1)
 
-        # Подпись улиц
-        if street_names and points:
-            for (coord, name) in street_names.items():
-                x, y = map(int, coord.split(","))
-                cv2.putText(
-                    display,
-                    name,
-                    (x + x_offset, y + y_offset),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    0.5,
-                    (255, 255, 255),
-                    1,
-                )
+btn_left = tk.Button(control_frame, text="←", command=lambda: move_corner(selected_corner.get(), -10, 0))
+btn_left.grid(row=1, column=0)
 
-    cv2.imshow("Проектор", display)
+btn_right = tk.Button(control_frame, text="→", command=lambda: move_corner(selected_corner.get(), 10, 0))
+btn_right.grid(row=1, column=2)
 
+btn_down = tk.Button(control_frame, text="↓", command=lambda: move_corner(selected_corner.get(), 0, 10))
+btn_down.grid(row=2, column=1)
 
-def calibrate():
-    """Основной процесс калибровки."""
-    config = load_config()
-    points = None
-    street_names = {}
+btn_confirm = tk.Button(control_frame, text="Подтвердить", command=confirm_corners)
+btn_confirm.grid(row=1, column=4)
 
-    while True:
-        ret, frame = camera.read()
-        if not ret:
-            print("Ошибка подключения к камере.")
-            break
+# Выбор угла
+selected_corner = tk.IntVar(value=0)
+corner_select = tk.Frame(control_frame)
+corner_select.grid(row=0, column=3, rowspan=3)
 
-        frame = cv2.resize(frame, (PROJECTOR_RESOLUTION[0], PROJECTOR_RESOLUTION[1]))
+for i in range(4):
+    rb = tk.Radiobutton(corner_select, text=f"Угол {i + 1}", variable=selected_corner, value=i)
+    rb.pack(anchor="w")
 
-        # Если уже есть сохранённые данные
-        if config and "points" in config:
-            points = np.array(config["points"], dtype="float32")
-            warped, _ = warp_board(frame, points)
-            render_projector_display(warped, config.get("street_names", {}), points)
+# Цикл обновления окна
+def update():
+    try:
+        redraw_canvas()
+    except Exception as e:
+        messagebox.showerror("Ошибка", f"Не удаётся захватить кадр: {e}")
+    root.after(30, update)
 
-        # Если распознали поле автоматически
-        else:
-            points = find_board_edges(frame)
-            if points is not None:
-                for pt in points:
-                    cv2.circle(frame, tuple(pt), 10, (0, 255, 0), -1)
-                cv2.polylines(frame, [points], isClosed=True, color=(0, 255, 0), thickness=2)
-                warped, _ = warp_board(frame, points)
-                cv2.imshow("Камера", frame)
+update()
+root.mainloop()
 
-        # Управление
-        print("\n1 - Автокалибровка")
-        print("2 - Ручная калибровка")
-        print("3 - Ввод улиц")
-        print("s - Сохранение")
-        print("q - Выйти")
-        key = cv2.waitKey(0)
-
-        if key == ord("1") and points is not None:
-            print("Автокалибровка завершена.")
-            config = {"points": points.tolist()}
-
-        elif key == ord("2"):
-            print("Перейдите к ручной настройке.")
-            # Здесь будет реализована ручная корректировка.
-
-        elif key == ord("3"):
-            print("Введите названия улиц.")
-            street_names = define_street_names(warped)
-            config["street_names"] = street_names
-
-        elif key == ord("s"):
-            if config:
-                save_config(config)
-
-        elif key == ord("q"):
-            break
-
-    camera.release()
-    cv2.destroyAllWindows()
-
-
-if __name__ == "__main__":
-    calibrate()
+cap.release()
