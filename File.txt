@@ -1,0 +1,146 @@
+import cv2
+import numpy as np
+import json
+import os
+
+# Параметры
+CAMERA_URL = "http://192.168.31.40:4747/video"  # URL IP-камеры
+PROJECTOR_RESOLUTION = (1920, 1200)  # Разрешение проектора
+TARGET_SIZE = 800  # Размер внутреннего поля
+CONFIG_FILE = "board_config.json"
+
+camera = cv2.VideoCapture(CAMERA_URL)
+
+
+def save_config(data):
+    """Сохранение конфигурации в файл."""
+    with open(CONFIG_FILE, "w") as f:
+        json.dump(data, f)
+    print("Конфигурация сохранена.")
+
+
+def load_config():
+    """Загрузка конфигурации из файла."""
+    if os.path.exists(CONFIG_FILE):
+        with open(CONFIG_FILE, "r") as f:
+            return json.load(f)
+    return None
+
+
+def find_board_edges(frame):
+    """Автоматическое нахождение углов игрового поля."""
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    blurred = cv2.GaussianBlur(gray, (5, 5), 0)
+    _, thresh = cv2.threshold(blurred, 200, 255, cv2.THRESH_BINARY)
+
+    contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    largest_contour = max(contours, key=cv2.contourArea, default=None)
+
+    if largest_contour is not None:
+        approx = cv2.approxPolyDP(largest_contour, 0.02 * cv2.arcLength(largest_contour, True), True)
+        if len(approx) == 4:
+            return np.array(sorted(np.squeeze(approx), key=lambda x: (x[1], x[0])))
+    return None
+
+
+def warp_board(frame, points):
+    """Перспективная трансформация игрового поля."""
+    destination = np.array(
+        [[0, 0], [TARGET_SIZE, 0], [TARGET_SIZE, TARGET_SIZE], [0, TARGET_SIZE]],
+        dtype="float32",
+    )
+    transform_matrix = cv2.getPerspectiveTransform(points, destination)
+    return cv2.warpPerspective(frame, transform_matrix, (TARGET_SIZE, TARGET_SIZE)), transform_matrix
+
+
+def render_projector_display(warped_field, street_names, points):
+    """Отображение изображения на проекторе."""
+    display = np.zeros((PROJECTOR_RESOLUTION[1], PROJECTOR_RESOLUTION[0], 3), dtype=np.uint8)
+
+    if warped_field is not None:
+        # Вставка игрового поля на центр
+        x_offset = (PROJECTOR_RESOLUTION[0] - TARGET_SIZE) // 2
+        y_offset = (PROJECTOR_RESOLUTION[1] - TARGET_SIZE) // 2
+        display[y_offset:y_offset + TARGET_SIZE, x_offset:x_offset + TARGET_SIZE] = warped_field
+
+        # Подпись улиц
+        if street_names and points:
+            for (coord, name) in street_names.items():
+                x, y = map(int, coord.split(","))
+                cv2.putText(
+                    display,
+                    name,
+                    (x + x_offset, y + y_offset),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.5,
+                    (255, 255, 255),
+                    1,
+                )
+
+    cv2.imshow("Проектор", display)
+
+
+def calibrate():
+    """Основной процесс калибровки."""
+    config = load_config()
+    points = None
+    street_names = {}
+
+    while True:
+        ret, frame = camera.read()
+        if not ret:
+            print("Ошибка подключения к камере.")
+            break
+
+        frame = cv2.resize(frame, (PROJECTOR_RESOLUTION[0], PROJECTOR_RESOLUTION[1]))
+
+        # Если уже есть сохранённые данные
+        if config and "points" in config:
+            points = np.array(config["points"], dtype="float32")
+            warped, _ = warp_board(frame, points)
+            render_projector_display(warped, config.get("street_names", {}), points)
+
+        # Если распознали поле автоматически
+        else:
+            points = find_board_edges(frame)
+            if points is not None:
+                for pt in points:
+                    cv2.circle(frame, tuple(pt), 10, (0, 255, 0), -1)
+                cv2.polylines(frame, [points], isClosed=True, color=(0, 255, 0), thickness=2)
+                warped, _ = warp_board(frame, points)
+                cv2.imshow("Камера", frame)
+
+        # Управление
+        print("\n1 - Автокалибровка")
+        print("2 - Ручная калибровка")
+        print("3 - Ввод улиц")
+        print("s - Сохранение")
+        print("q - Выйти")
+        key = cv2.waitKey(0)
+
+        if key == ord("1") and points is not None:
+            print("Автокалибровка завершена.")
+            config = {"points": points.tolist()}
+
+        elif key == ord("2"):
+            print("Перейдите к ручной настройке.")
+            # Здесь будет реализована ручная корректировка.
+
+        elif key == ord("3"):
+            print("Введите названия улиц.")
+            street_names = define_street_names(warped)
+            config["street_names"] = street_names
+
+        elif key == ord("s"):
+            if config:
+                save_config(config)
+
+        elif key == ord("q"):
+            break
+
+    camera.release()
+    cv2.destroyAllWindows()
+
+
+if __name__ == "__main__":
+    calibrate()
