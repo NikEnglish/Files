@@ -13,41 +13,64 @@ if not cap.isOpened():
     print("Не удалось подключиться к камере.")
     exit()
 
-# Калибровочные точки для отображения на проекторе
-# (это пример, точки нужно будет распознать вручную по ходу теста)
-calibration_points = [(100, 100), (1800, 100), (1800, 1100), (100, 1100)]
+# Основная логика для обнаружения углов
+def find_corners(frame):
+    """
+    Ищем углы/границы поля с помощью метода Canny для детекции краёв и потом corners.
+    """
+    # Преобразуем в черно-белое изображение для упрощения обработки
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    
+    # Применяем детектор краёв Canny
+    edges = cv2.Canny(gray, 50, 150, apertureSize=3)
 
-def draw_calibration_points(image):
+    # Находим линии на изображении (используем преобразование Хафа)
+    lines = cv2.HoughLinesP(edges, 1, np.pi / 180, 50, minLineLength=100, maxLineGap=10)
+
+    # Рисуем линии на изображении для отладки
+    if lines is not None:
+        for line in lines:
+            x1, y1, x2, y2 = line[0]
+            cv2.line(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+
+    # Ищем углы через Harris или другие методы, если нужно более точно
+    # Для простоты выводим 4 угла в виде точек (к примеру)
+    return [(100, 100), (1800, 100), (1800, 1100), (100, 1100)]  # Здесь можно ввести любую коррекцию
+
+def draw_corners(frame, corners):
     """
-    Отображаем калибровочные точки на изображении.
+    Отображаем найденные углы на экране (проектор).
     """
-    for point in calibration_points:
-        cv2.circle(image, point, 10, (0, 255, 0), -1)  # Рисуем зелёную точку
+    for corner in corners:
+        cv2.circle(frame, corner, 10, (0, 0, 255), -1)  # Красные точки на углах
 
 def calibrate():
     """
-    Основная логика калибровки.
+    Логика калибровки.
     """
     while True:
         ret, frame = cap.read()
         if not ret:
             break
-
+        
         frame = cv2.resize(frame, (PROJECTION_WIDTH, PROJECTION_HEIGHT))
 
-        # Чёрный фон и вывод точек
+        # Чёрный фон и поиск углов
         black_image = np.zeros((PROJECTION_HEIGHT, PROJECTION_WIDTH, 3), dtype=np.uint8)
 
-        draw_calibration_points(black_image)  # Отображаем калибровочные точки
+        # Находим углы
+        corners = find_corners(frame)
+        
+        # Отображаем эти углы на чёрном фоне
+        draw_corners(black_image, corners)
 
-        # Отображаем изображения на экране компьютера
+        # Выводим изображения на проектор
         cv2.imshow("Проектор - Калибровка", black_image)
 
         key = cv2.waitKey(1) & 0xFF
-
-        if key == ord('q'):  # Если нажать 'q' - выйти из цикла
+        if key == ord('q'):  # Нажать q для выхода
             break
-        if key == ord('r'):  # Если нажать 'r' - повторить калибровку
+        if key == ord('r'):  # Нажать r для повторной калибровки
             print("Перезапуск калибровки.")
             continue
 
