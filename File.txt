@@ -1,74 +1,59 @@
-import tkinter as tk
-from tkinter import filedialog
-from PIL import Image, ImageTk
-import numpy as np
+алг рабочийКодКумир  
+начало  
+  цел n, i, x, sum  
+  логический флаг  
+  строка текст  
 
-class FieldApp:
-    def __init__(self, root):
-        self.root = root
-        self.root.title("Отображение границ для проектора")
+  вывод "Введите число (сколько раз выполнять цикл): "  
+  ввод n  
 
-        # Создаем canvas для отображения изображения
-        self.canvas = tk.Canvas(root, width=1920, height=1200, bg="black")
-        self.canvas.pack()
+  флаг := ложь  
+  текст := "Работаем со всеми элементами Кумир"  
 
-        # Диалог выбора изображения
-        self.image_path = filedialog.askopenfilename(title="Выберите изображение", filetypes=[("Image Files", "*.png;*.jpg;*.jpeg")])
+  вывод "Введите число для вычислений: "  
+  ввод x  
+  sum := 0  
 
-        if not self.image_path:
-            self.root.quit()  # Закрывает программу, если файл не был выбран
-            return
+  нц для i от 1 до n  
+    sum := sum + i * x  
+  кц  
 
-        # Загружаем изображение
-        self.original_image = Image.open(self.image_path)
-        self.image = self.original_image
-        self.photo = ImageTk.PhotoImage(self.image)
+  вывод "Сумма выражений (1*x + 2*x + ... + n*x) = ", sum  
 
-        # Отображаем изображение на канвасе
-        self.canvas.create_image(0, 0, image=self.photo, anchor=tk.NW)
+  если sum > 100 то  
+    вывод "Сумма больше 100"  
+    флаг := истина  
+  иначе  
+    вывод "Сумма меньше или равна 100"  
+  все  
 
-        # Масштаб и смещение для перемещения изображения
-        self.scale = 1
-        self.offset_x, self.offset_y = 0, 0
+  вывод "Введите команду (1 - приветствие, 2 - работа с роботом): "  
+  ввод i  
 
-        self.canvas.bind("<B1-Motion>", self.on_drag)  # Перемещение изображения
-        self.root.bind("<MouseWheel>", self.zoom)  # Масштабирование изображения
+  выбор i  
+    1:  
+      вывод "Привет! Вот текст: ", текст  
+    2:  
+      нц раз 3  
+        выбор  
+          при справа свободно:  
+            вправо  
+          при снизу свободно:  
+            вниз  
+          иначе  
+            вверх; влево  
+        все  
+        закрасить  
+      кц  
+  все  
 
-        # Обработка черных линий
-        self.process_borders()
+  вывод "Введите число для цикла пока: "  
+  ввод x  
 
-    def zoom(self, event):
-        """Масштабирование изображения с помощью колесика мыши"""
-        if event.delta > 0:
-            self.scale *= 1.1
-        else:
-            self.scale /= 1.1
+  нц пока x > 0  
+    вывод "x = ", x  
+    x := x - 1  
+  кц  
 
-        new_size = (int(self.original_image.width * self.scale), int(self.original_image.height * self.scale))
-        self.image = self.original_image.resize(new_size, Image.Resampling.LANCZOS)  # Исправлено на LANCZOS
-        self.photo = ImageTk.PhotoImage(self.image)
-
-        self.canvas.create_image(self.offset_x, self.offset_y, image=self.photo, anchor=tk.NW)
-
-    def on_drag(self, event):
-        """Перемещение изображения на канвасе"""
-        dx = event.x - self.offset_x
-        dy = event.y - self.offset_y
-        self.offset_x, self.offset_y = event.x, event.y
-        self.canvas.create_image(self.offset_x, self.offset_y, image=self.photo, anchor=tk.NW)
-
-    def process_borders(self):
-        """Поиск черных линий и их подсветка на изображении"""
-        image_data = np.array(self.image)
-
-        # Предполагаем, что черные линии имеют низкие значения красного, зеленого и синего каналов
-        for y in range(image_data.shape[0]):
-            for x in range(image_data.shape[1]):
-                r, g, b = image_data[y, x]
-                if r < 50 and g < 50 and b < 50:  # Черные пиксели
-                    self.canvas.create_oval(x, y, x+1, y+1, fill="black")
-
-if __name__ == "__main__":
-    root = tk.Tk()
-    app = FieldApp(root)
-    root.mainloop()
+  вывод "Конец программы."  
+конец
