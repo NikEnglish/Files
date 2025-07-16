@@ -1,89 +1,22 @@
-<!-- Полная реализация конструктора сайта с действиями и элементами --><!DOCTYPE html><html lang="ru">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Сайт для Сайтов</title>
-  <style>
-    * { box-sizing: border-box; }
-    html, body { margin: 0; padding: 0; height: 100%; font-family: sans-serif; overflow: hidden; }
-    #app {
-      display: grid;
-      grid-template-columns: 250px 1fr 300px;
-      grid-template-rows: 1fr 200px;
-      grid-template-areas: "left center right" "bottom bottom bottom";
-      height: 100%;
-    }
-    #left { grid-area: left; background: #eee; overflow-y: auto; padding: 10px; border-right: 1px solid #ccc; }
-    #right { grid-area: right; background: #f9f9f9; overflow-y: auto; padding: 10px; border-left: 1px solid #ccc; }
-    #center { grid-area: center; background: white; position: relative; overflow: auto; }
-    #bottom { grid-area: bottom; background: #1e1e1e; color: white; padding: 10px; font-family: monospace; overflow: auto; }
-    .element-item {
-      border: 1px solid #ccc;
-      background: #fff;
-      padding: 6px;
-      margin-bottom: 6px;
-      cursor: grab;
-    }
-    .preview-element {
-      position: absolute;
-      border: 1px dashed #888;
-      padding: 5px;
-      min-width: 50px;
-      min-height: 30px;
-      background: rgba(255, 255, 255, 0.8);
-      cursor: move;
-    }
-    label { display: block; margin-bottom: 5px; }
-    input, select { width: 100%; margin-bottom: 10px; }
-  </style>
-</head>
-<body>
-<div id="app">
-  <div id="left">
-    <h3>Слои</h3>
-    <div id="layers"></div>
-    <button onclick="addLayer()">➕ Добавить слой</button>
-  </div>
-  <div id="center" ondrop="drop(event)" ondragover="allowDrop(event)"></div>
-  <div id="right">
-    <h3>Элементы</h3>
-    <div id="elements"></div>
-    <h4>Свойства</h4>
-    <div id="properties"></div>
-    <h4>Действия</h4>
-    <div id="actions"></div>
-  </div>
-  <div id="bottom">
-    <h4>Код сайта:</h4>
-    <pre id="code-output">&lt;!-- Код появится здесь --&gt;</pre>
-  </div>
-</div>
-<script>
-const elementsList = [
-  'button', 'rectangle', 'circle', 'text', 'slider', 'image', 'input', 'checkbox', 'select', 'link',
-  'progress', 'audio', 'video', 'iframe', 'html', 'js', 'container', 'header', 'footer', 'nav',
-  'section', 'article', 'aside', 'table', 'list', 'card', 'modal', 'form', 'switch', 'range'
-];let currentLayer = 'Слой 1'; let layers = { 'Слой 1': [] }; let draggedType = null; let elementId = 0; let selectedElement = null;
+Сайт для сайтов это мой новый инновационный проект который я придумал самостоятельно и так реализация я хочу сделать такой сайт где можно будет создать собственный сайт практически без кодинга начнем слева у нас будет панель-древо на момент открытия сайта есть только кнопка вверху со слоями есть кнопа создать слой после ее нажатия высвечивается окно с просьбой назвать слой после названия он появляется ка кнопка и кнопка добавить слой превращается в аккуратный плюсик справа от слоя выбрав 1 слой мы приступаем в центре есть предпросмотр нашего сайта чтобы мы видели как все происходит конечно е там можно потыкаться если сайт интерактивный справа сразу будет кнопка переключения между версией для пк и для телефонов чтобы сразу посмотреть оптимизацию сайта для тех или иных устройств также при переключении можно выбрать dpi чтобы проверить оптимизация под абсолютно любые экраны версия для пк подробное объяснение в версии для пк мышь используется как мышь а вот с версией для телефонов поинтереснее ак как на телефонах идут свайпы они обрабатываются по другому поэтому мышь превращается в как таковой палец то есть сайт воспринимает как свайпы и нажатия на экран а не как мышь и так переходим в правую панель это самая главная панель там находятся все блоки которые можно использовать они сгруппированы для удобства и так начнем будут такие группы как 
+1. Фигуры и примитивы (9 элементов) - Прямоугольник, Круг, Линия, Звезда, Сердце, Треугольник, Ромб, Квадрат, Волна 
+2. Контейнеры (9 элементов) - Блок, Карточка, Колонки, Сетка, Таблица, Аккордеон, Модальное окно, Слайдер, Вкладки 
+3. Текст и типографика (9 элементов) - Заголовок, Параграф, Список, Нумерованный список, Цитата, Код, Текстовое поле, Текст с тенью, Выделенный текст
+4. Кнопки и интерактив (9 элементов) - Кнопка, Ссылка, Переключатель, Чекбокс, Радиокнопка, Слайдер, Кнопка +, Кнопка -, Кнопка × 
+5. Формы и ввод (9 элементов) - Текстовое поле, Текстовая область, Выпадающий список, Выбор даты, Поле поиска, Пароль, Email, Телефон, Загрузка файла
+6. Медиа (9 элементов) - Изображение, Галерея, Видео, Аудио, Карта, График, Иконка, SVG, Камера 
+7. Логика и действия (9 элементов) - Клик, Наведение, Таймер, JavaScript, Условие, Цикл, Данные, API запрос, Фильтр 
+8. Мобильные элементы (9 элементов) - Бургер-меню, Кнопка вверх, Чат, Шаринг, Лайк, Свайп, Тап, Уведомление, QR сканер 
+Всего поучается 72 элемента возможно есть еще какие то но для моего сайта этого будет за глаза и та возьмем за пример квадрат мы берем нажимаем левой кнопко мыши удерживаем и перетаскиваем в левую часть он сразу появляется у нас в предпросмотре и мы видим просто квадрат нажав а него у нас убирается справа меню с элементами и появляется меню свойств элемента в свойствах будет много всего 
+1.	Перемещение перемещение фигуры в пространстве на сайт без контейнера центрирование идет по центру сайта 
+2.	Растягивание и изменение свойств фигуры такое как скругление растягивание сужении наклон масштаб вращение цвет и т.п.
+3.	Действие самое подробное что может быть 
+Сейчас будет описание того, что можно сделать в действии
+1)	Нажатие
+2)	Удержание
+3)	Нажатие и удержание
+4)	Свайп
+5)	Наведение
+Мы выбираем из этого списка ка мы хотим, чтобы действии выполнилось мы выбрали, например нажатие в принципе везде оно будет одно и тоже только в свайпе будет выбор свайп куда в какую сторону
+В действии мы можем выбрать, например увеличение после выбора увеличение нас просят выбрать, а что увеличить? Данный объект или выбрать другой если выбрать другое высвечиваются все объекты которые есть в дереве также работает и с перемещение свойствами для кнопок слайдеров и всего с подписями будет выбор изменения подписи а также убирания ее или наоборот появления также ля слайдеров подпись текущего состояния имеется ввиду в каком положении слайдер а также изменения его шага или вообще его убирание полное редактирование текста при выборе в действии редактировать то есть к каждому действию должно быть то или иное доп действие как я описал ранее для текстов редактирование для кнопок изменение и так левая панель после перетаскивания на нее при нажатии правой кнопкой мыши можно сделать его группой переименовать удалить объект группа при создании группы мы можем перетаскивать объекты в сам объект в данном случае в квадрат и центрирование будет происходить уже по нему а также то что будет в квадрате не может выйти за его рамки по вакту его рамки и все что за ним как будто выше слоем и выйти за рамки квадрата объекты не могут они будут просто убого обрезаны им можно распустить группу слои работают так правой кнопкой мыши по слою можно блокировать слой чтобы его нельзя было редактировать можно его переименовать или удалить а также сделать основным(основной это тот который высвечивается при заходе на сайт) и слои используются в основном для модальных окон или новый всплывающих фигур например и обязательно в действиях должна быть работа со слоями при просмотре сайта виден только тот слой который редактируешь а при нажатии кнопки запуск сайта показывается основной слой а другие показываются только по действию по прокрутке например можно добавлять различные анимации а также Джава скрипт код например для подключения чего то иного например базы данных его тоже можно вызвать по нажатию через действие понятное дело можно загружать свои изображения шрифты и т.п. и внизу сайта будет код HTML+CSS+JS все сразу чтобы этот код можно было скопировать вставить где угодно и все работало 
 
-const elementsContainer = document.getElementById('elements'); elementsList.forEach(type => { const div = document.createElement('div'); div.className = 'element-item'; div.textContent = type; div.draggable = true; div.ondragstart = () => draggedType = type; elementsContainer.appendChild(div); });
-
-function allowDrop(e) { e.preventDefault(); }
-
-function drop(e) { if (!draggedType) return; const id = 'el' + elementId++; const el = document.createElement('div'); el.className = 'preview-element'; el.textContent = draggedType; el.style.left = e.offsetX + 'px'; el.style.top = e.offsetY + 'px'; el.setAttribute('data-id', id); el.setAttribute('data-type', draggedType); el.onclick = () => selectElement(el); document.getElementById('center').appendChild(el); layers[currentLayer].push(el.outerHTML); generateCode(); }
-
-function addLayer() { const name = prompt('Имя слоя:'); if (!name || layers[name]) return; layers[name] = []; const btn = document.createElement('button'); btn.textContent = name; btn.onclick = () => switchLayer(name); document.getElementById('layers').appendChild(btn); }
-
-function switchLayer(name) { currentLayer = name; const center = document.getElementById('center'); center.innerHTML = ''; layers[name].forEach(html => { const temp = document.createElement('div'); temp.innerHTML = html; const node = temp.firstChild; node.onclick = () => selectElement(node); center.appendChild(node); }); generateCode(); }
-
-function generateCode() { const html = document.getElementById('center').innerHTML; document.getElementById('code-output').textContent = html; }
-
-function selectElement(el) { selectedElement = el; const props = document.getElementById('properties'); const actions = document.getElementById('actions'); props.innerHTML = ''; actions.innerHTML = '';
-
-const propsData = [ { label: 'Top', name: 'top', value: parseInt(el.style.top) || 0 }, { label: 'Left', name: 'left', value: parseInt(el.style.left) || 0 }, { label: 'Width', name: 'width', value: parseInt(el.style.width) || 100 }, { label: 'Height', name: 'height', value: parseInt(el.style.height) || 30 }, { label: 'Color', name: 'backgroundColor', value: el.style.backgroundColor || '#ffffff' }, { label: 'Text', name: 'textContent', value: el.textContent || '' } ];
-
-propsData.forEach(({ label, name, value }) => { const input = document.createElement('input'); input.value = value; input.type = name === 'backgroundColor' ? 'color' : 'text'; input.oninput = () => { if (name === 'textContent') el.textContent = input.value; else el.style[name] = name === 'top' || name === 'left' || name === 'width' || name === 'height' ? input.value + 'px' : input.value; generateCode(); }; const lbl = document.createElement('label'); lbl.textContent = label; lbl.appendChild(input); props.appendChild(lbl); });
-
-const actionSelect = document.createElement('select'); ['Ничего', 'Показать слой', 'Скрыть слой', 'Изменить цвет', 'Увеличить'].forEach(action => { const opt = document.createElement('option'); opt.textContent = action; actionSelect.appendChild(opt); }); const lblAction = document.createElement('label'); lblAction.textContent = 'Действие при клике'; lblAction.appendChild(actionSelect); actions.appendChild(lblAction); } </script>
-
-</body>
-</html>
