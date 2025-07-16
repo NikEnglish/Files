@@ -1,13 +1,89 @@
-Никита, доброе утро
-Вот ссылочки на урок
-1
-https://us05web.zoom.us/j/85084457489?pwd=6sPLIuGo5WNBVtl6rvqZojRc0WTdkf.1
+<!-- Полная реализация конструктора сайта с действиями и элементами --><!DOCTYPE html><html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Сайт для Сайтов</title>
+  <style>
+    * { box-sizing: border-box; }
+    html, body { margin: 0; padding: 0; height: 100%; font-family: sans-serif; overflow: hidden; }
+    #app {
+      display: grid;
+      grid-template-columns: 250px 1fr 300px;
+      grid-template-rows: 1fr 200px;
+      grid-template-areas: "left center right" "bottom bottom bottom";
+      height: 100%;
+    }
+    #left { grid-area: left; background: #eee; overflow-y: auto; padding: 10px; border-right: 1px solid #ccc; }
+    #right { grid-area: right; background: #f9f9f9; overflow-y: auto; padding: 10px; border-left: 1px solid #ccc; }
+    #center { grid-area: center; background: white; position: relative; overflow: auto; }
+    #bottom { grid-area: bottom; background: #1e1e1e; color: white; padding: 10px; font-family: monospace; overflow: auto; }
+    .element-item {
+      border: 1px solid #ccc;
+      background: #fff;
+      padding: 6px;
+      margin-bottom: 6px;
+      cursor: grab;
+    }
+    .preview-element {
+      position: absolute;
+      border: 1px dashed #888;
+      padding: 5px;
+      min-width: 50px;
+      min-height: 30px;
+      background: rgba(255, 255, 255, 0.8);
+      cursor: move;
+    }
+    label { display: block; margin-bottom: 5px; }
+    input, select { width: 100%; margin-bottom: 10px; }
+  </style>
+</head>
+<body>
+<div id="app">
+  <div id="left">
+    <h3>Слои</h3>
+    <div id="layers"></div>
+    <button onclick="addLayer()">➕ Добавить слой</button>
+  </div>
+  <div id="center" ondrop="drop(event)" ondragover="allowDrop(event)"></div>
+  <div id="right">
+    <h3>Элементы</h3>
+    <div id="elements"></div>
+    <h4>Свойства</h4>
+    <div id="properties"></div>
+    <h4>Действия</h4>
+    <div id="actions"></div>
+  </div>
+  <div id="bottom">
+    <h4>Код сайта:</h4>
+    <pre id="code-output">&lt;!-- Код появится здесь --&gt;</pre>
+  </div>
+</div>
+<script>
+const elementsList = [
+  'button', 'rectangle', 'circle', 'text', 'slider', 'image', 'input', 'checkbox', 'select', 'link',
+  'progress', 'audio', 'video', 'iframe', 'html', 'js', 'container', 'header', 'footer', 'nav',
+  'section', 'article', 'aside', 'table', 'list', 'card', 'modal', 'form', 'switch', 'range'
+];let currentLayer = 'Слой 1'; let layers = { 'Слой 1': [] }; let draggedType = null; let elementId = 0; let selectedElement = null;
 
-2
-https://us05web.zoom.us/j/82610543426?pwd=wIhCCUHg6KsqsFCTAICQb1P2B3di3y.1
+const elementsContainer = document.getElementById('elements'); elementsList.forEach(type => { const div = document.createElement('div'); div.className = 'element-item'; div.textContent = type; div.draggable = true; div.ondragstart = () => draggedType = type; elementsContainer.appendChild(div); });
 
-3
-https://us05web.zoom.us/j/86386789208?pwd=GVTwbV7LU2wGOm9h1f4tJnL834F691.1
+function allowDrop(e) { e.preventDefault(); }
 
-4
-https://us05web.zoom.us/j/86263392699?pwd=AbVprnJnaLxhXOERZmApj93ZBKL3Cq.1
+function drop(e) { if (!draggedType) return; const id = 'el' + elementId++; const el = document.createElement('div'); el.className = 'preview-element'; el.textContent = draggedType; el.style.left = e.offsetX + 'px'; el.style.top = e.offsetY + 'px'; el.setAttribute('data-id', id); el.setAttribute('data-type', draggedType); el.onclick = () => selectElement(el); document.getElementById('center').appendChild(el); layers[currentLayer].push(el.outerHTML); generateCode(); }
+
+function addLayer() { const name = prompt('Имя слоя:'); if (!name || layers[name]) return; layers[name] = []; const btn = document.createElement('button'); btn.textContent = name; btn.onclick = () => switchLayer(name); document.getElementById('layers').appendChild(btn); }
+
+function switchLayer(name) { currentLayer = name; const center = document.getElementById('center'); center.innerHTML = ''; layers[name].forEach(html => { const temp = document.createElement('div'); temp.innerHTML = html; const node = temp.firstChild; node.onclick = () => selectElement(node); center.appendChild(node); }); generateCode(); }
+
+function generateCode() { const html = document.getElementById('center').innerHTML; document.getElementById('code-output').textContent = html; }
+
+function selectElement(el) { selectedElement = el; const props = document.getElementById('properties'); const actions = document.getElementById('actions'); props.innerHTML = ''; actions.innerHTML = '';
+
+const propsData = [ { label: 'Top', name: 'top', value: parseInt(el.style.top) || 0 }, { label: 'Left', name: 'left', value: parseInt(el.style.left) || 0 }, { label: 'Width', name: 'width', value: parseInt(el.style.width) || 100 }, { label: 'Height', name: 'height', value: parseInt(el.style.height) || 30 }, { label: 'Color', name: 'backgroundColor', value: el.style.backgroundColor || '#ffffff' }, { label: 'Text', name: 'textContent', value: el.textContent || '' } ];
+
+propsData.forEach(({ label, name, value }) => { const input = document.createElement('input'); input.value = value; input.type = name === 'backgroundColor' ? 'color' : 'text'; input.oninput = () => { if (name === 'textContent') el.textContent = input.value; else el.style[name] = name === 'top' || name === 'left' || name === 'width' || name === 'height' ? input.value + 'px' : input.value; generateCode(); }; const lbl = document.createElement('label'); lbl.textContent = label; lbl.appendChild(input); props.appendChild(lbl); });
+
+const actionSelect = document.createElement('select'); ['Ничего', 'Показать слой', 'Скрыть слой', 'Изменить цвет', 'Увеличить'].forEach(action => { const opt = document.createElement('option'); opt.textContent = action; actionSelect.appendChild(opt); }); const lblAction = document.createElement('label'); lblAction.textContent = 'Действие при клике'; lblAction.appendChild(actionSelect); actions.appendChild(lblAction); } </script>
+
+</body>
+</html>
