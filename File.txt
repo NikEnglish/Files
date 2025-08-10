@@ -1,6 +1,7 @@
 import time
 import os
 import asyncio
+import sys
 from telegram import Bot, Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 from telegram.error import TelegramError
@@ -89,14 +90,13 @@ async def monitor_logs(application):
 
 async def post_init(application: ApplicationBuilder):
     """Запускает мониторинг логов после инициализации бота."""
-    # Запускаем мониторинг логов в отдельной задаче, чтобы он работал параллельно с ботом
     asyncio.create_task(monitor_logs(application))
 
 async def main():
     """Основная функция для запуска бота."""
     if not all([TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID]):
         print("Ошибка: Укажите TELEGRAM_BOT_TOKEN и TELEGRAM_CHAT_ID в настройках.")
-        return
+        sys.exit(1)
 
     load_muted_players()
 
@@ -109,4 +109,4 @@ async def main():
     await application.run_polling()
 
 if __name__ == '__main__':
-    asyncio.run(main())
+    main()
