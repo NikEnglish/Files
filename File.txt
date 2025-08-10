@@ -3,22 +3,14 @@ import os
 import asyncio
 from telegram import Bot, Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
-import re
+from telegram.error import TelegramError
 
 # --- Настройки ---
-# Ваш токен бота
 TELEGRAM_BOT_TOKEN = 'ВАШ_ТОКЕН_БОТА'
-
-# ID чата или канала
 TELEGRAM_CHAT_ID = 'ВАШ_CHAT_ID'
-
-# Путь к файлу логов Minecraft
 LOG_FILE_PATH = os.path.join(os.getenv('APPDATA'), '.minecraft', 'logs', 'latest.log')
-
-# Путь к файлу для хранения заглушенных игроков
 MUTED_PLAYERS_FILE = 'muted_players.txt'
 
-# Список игроков, сообщения которых игнорируются
 muted_players = set()
 
 def load_muted_players():
@@ -39,7 +31,6 @@ def save_muted_players():
 
 async def mute_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик команды /mute."""
-    # Проверяем, что команда пришла из нужного чата
     if str(update.effective_chat.id) != TELEGRAM_CHAT_ID:
         return
 
@@ -54,7 +45,6 @@ async def mute_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def unmute_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик команды /unmute."""
-    # Проверяем, что команда пришла из нужного чата
     if str(update.effective_chat.id) != TELEGRAM_CHAT_ID:
         return
 
@@ -70,10 +60,11 @@ async def unmute_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         await update.message.reply_text(f"Игрок '{player_to_unmute}' не был заглушен.")
 
-async def monitor_logs(bot, chat_id, file_path):
-    """Следит за новыми строками в лог-файле и отправляет их в Telegram."""
+async def monitor_logs(application):
+    """Следит за логами и отправляет сообщения в Telegram."""
     try:
-        with open(file_path, 'r', encoding='utf-8', errors='ignore') as file:
+        bot = application.bot
+        with open(LOG_FILE_PATH, 'r', encoding='utf-8', errors='ignore') as file:
             file.seek(0, os.SEEK_END)
 
             print("Бот готов. Ожидаю сообщений в логах Minecraft...")
@@ -86,39 +77,35 @@ async def monitor_logs(bot, chat_id, file_path):
 
                 if "[CHAT]" in line:
                     chat_message = line.split('[CHAT] ')[-1].strip()
-                    # Извлекаем ник игрока для проверки
                     player_name = chat_message.split(':', 1)[0].strip()
 
-                    # Если игрок не заглушен, отправляем сообщение
                     if player_name not in muted_players:
-                        await bot.send_message(chat_id=chat_id, text=chat_message)
+                        await bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=chat_message)
                         
     except FileNotFoundError:
-        print(f"Ошибка: Файл не найден по пути: {file_path}")
+        print(f"Ошибка: Файл не найден по пути: {LOG_FILE_PATH}")
     except Exception as e:
         print(f"Произошла ошибка при чтении файла: {e}")
 
+async def post_init(application: ApplicationBuilder):
+    """Запускает мониторинг логов после инициализации бота."""
+    # Запускаем мониторинг логов в отдельной задаче, чтобы он работал параллельно с ботом
+    asyncio.create_task(monitor_logs(application))
+
 async def main():
-    """Основная функция для запуска асинхронного цикла."""
+    """Основная функция для запуска бота."""
     if not all([TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID]):
         print("Ошибка: Укажите TELEGRAM_BOT_TOKEN и TELEGRAM_CHAT_ID в настройках.")
         return
 
-    # Загружаем список заглушенных игроков при старте
     load_muted_players()
 
-    # Создаем Application
-    application = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
+    application = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).post_init(post_init).build()
     
-    # Регистрируем обработчики команд
     application.add_handler(CommandHandler("mute", mute_command))
     application.add_handler(CommandHandler("unmute", unmute_command))
-
-    # Запускаем мониторинг логов в отдельной задаче
-    bot_instance = Bot(token=TELEGRAM_BOT_TOKEN)
-    asyncio.create_task(monitor_logs(bot_instance, TELEGRAM_CHAT_ID, LOG_FILE_PATH))
-
-    # Запускаем бота, который будет ждать команды
+    
+    print("Бот запущен...")
     await application.run_polling()
 
 if __name__ == '__main__':
