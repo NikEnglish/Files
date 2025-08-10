@@ -109,4 +109,10 @@ async def main():
     await application.run_polling()
 
 if __name__ == '__main__':
-    main()
+    try:
+        # Пытаемся запустить асинхронную функцию
+        asyncio.run(main())
+    except RuntimeError:
+        # Если цикл уже запущен, запускаем его через get_event_loop
+        loop = asyncio.get_event_loop()
+        loop.run_until_complete(main())
