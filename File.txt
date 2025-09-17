@@ -584,7 +584,7 @@ async def show_main_menu(update: Update, user_id: int):
             ['ℹ️ Информация', '💡 Предложения', '💡 Предложить идею'],
             ['📢 Отправить ДЗ', '📢 Отправить уведомление'],
             ['Удалить ДЗ', 'Удалить уведомление', 'Удалить предложения'],
-            ['Удалить пользователя', 'Удалить спортивные уведомления'],
+            ['Удалить пользователя', 'Удалить спортивные уведомления', 'Список пользователей'],
             ['💰 Дать денюжку'],
             ['🎓 Сменить группу']
         ]
@@ -661,6 +661,9 @@ async def handle_simple_message(update: Update, context: ContextTypes.DEFAULT_TY
 
     elif text == '💡 Предложения' and (role in [ROLE_IT_SPECIALIST, ROLE_PHYSICAL_ORGANIZER] or user_id in SPECIAL_USERS):
         await show_suggestions(update)
+    
+    elif text == 'Список пользователей' and user_id == DEVELOPER_ID:
+        await show_users_list(update)
 
     elif text == '💰 Дать денюжку':
         donate_text = "Если не жалко, можешь дать разрабу бота денюжку на дальнейшее развитие бота и на покушать😊"
@@ -1101,6 +1104,26 @@ async def show_suggestions(update: Update):
         username = f"@{s['username']}" if s['username'] else s['first_name']
         suggestions_text += f"{i}. {s['message']}\n👤 {username} | 📅 {datetime.fromisoformat(s['created_at']).strftime('%d.%m.%Y')}\n\n"
     await update.message.reply_text(suggestions_text, parse_mode='HTML')
+
+async def show_users_list(update: Update):
+    """Shows a list of all users for the developer"""
+    users = get_all_users()
+    if not users:
+        await update.message.reply_text("❌ В базе данных нет пользователей.")
+        return
+    
+    user_list_text = "👥 **Список пользователей**\n\n"
+    
+    for user in users:
+        username = user['username'] if user['username'] else "Нет юзернейма"
+        user_list_text += (
+            f"**Имя:** {user['first_name']}\n"
+            f"**Группа:** {user['group_name']}\n"
+            f"**Юзер:** @{username}\n"
+            f"**ID:** `{user['user_id']}`\n\n"
+        )
+    
+    await update.message.reply_text(user_list_text, parse_mode='Markdown')
 
 async def contact_physical_organizer(update: Update):
     """Contact the physical organizer"""
