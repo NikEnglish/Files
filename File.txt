@@ -4,7 +4,7 @@ import json
 import asyncio
 import requests
 import os
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone, time
 from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, ConversationHandler, CallbackQueryHandler
 
@@ -14,7 +14,7 @@ YEKATERINBURG_TZ = timezone(timedelta(hours=5))
 DEFAULT_GROUP = "ИД-127"
 
 # States for ConversationHandler
-AWAITING_HOMEWORK, AWAITING_INFO, AWAITING_SPORT, AWAITING_SUGGESTION, AWAITING_HOMEWORK_DELETE, AWAITING_INFO_DELETE, AWAITING_GROUP, AWAITING_USER_DELETE, AWAITING_SUGGESTION_DELETE, AWAITING_SPORT_DELETE = range(10)
+AWAITING_HOMEWORK, AWAITING_INFO, AWAITING_SPORT, AWAITING_SUGGESTION, AWAITING_HOMEWORK_DELETE, AWAITING_INFO_DELETE, AWAITING_SPORT_DELETE, AWAITING_GROUP, AWAITING_USER_DELETE, AWAITING_SUGGESTION_DELETE = range(10)
 
 # User Roles
 ROLE_STUDENT = 'student'
@@ -136,19 +136,16 @@ def add_user(user_id, username, first_name, last_name):
     
     existing_user = conn.execute('SELECT * FROM users WHERE user_id = ?', (user_id,)).fetchone()
     
-    # Определяем роль пользователя
     role = ROLE_STUDENT
     if user_id in SPECIAL_USERS:
         role = SPECIAL_USERS[user_id]['role']
     
     if not existing_user:
-        # Добавляем нового пользователя
         conn.execute('''INSERT INTO users (user_id, username, first_name, last_name, group_name, role)
                      VALUES (?, ?, ?, ?, ?, ?)''',
                      (user_id, username, first_name, last_name, DEFAULT_GROUP, role))
         print(f"ЛОГ: Добавлен новый пользователь: {first_name} (ID: {user_id}) с группой {DEFAULT_GROUP} и ролью {role}")
     else:
-        # Обновляем существующего пользователя (особенно роль, если изменилась)
         conn.execute('''UPDATE users 
                      SET username = ?, first_name = ?, last_name = ?, role = ?
                      WHERE user_id = ?''',
@@ -173,7 +170,6 @@ def get_total_user_count():
     conn.close()
     return count
     
-# Deletion Functions
 def delete_homework(hw_id):
     conn = get_db_connection()
     conn.execute('DELETE FROM homeworks WHERE id = ?', (hw_id,))
@@ -350,7 +346,7 @@ def get_schedule(period, group_name):
         return f"❌ Произошла ошибка: {str(e)}"
 
 async def check_schedule_changes(context: ContextTypes.DEFAULT_TYPE):
-    """Checks for schedule changes and notifies users"""
+    """Checks for schedule changes and notifies users with diff"""
     global schedule_cache, last_schedule_check
     
     print("ЛОГ: Проверка изменений в расписании...")
@@ -359,24 +355,51 @@ async def check_schedule_changes(context: ContextTypes.DEFAULT_TYPE):
     if not new_schedule:
         print("ЛОГ: Не удалось проверить изменения расписания")
         return
-    
-    # Check if schedule has changed
-    if schedule_cache != new_schedule:
-        print("ЛОГ: Обнаружены изменения в расписании")
-        schedule_cache = new_schedule
-        last_schedule_check = datetime.now(YEKATERINBURG_TZ)
+
+    # Check for changes in each group
+    for group_name in new_schedule.keys():
+        old_lessons = schedule_cache.get(group_name, [])
+        new_lessons = new_schedule.get(group_name, [])
         
-        # Notify all users about changes
-        for group_name in new_schedule.keys():
+        # Simple comparison to find what has been added or removed
+        old_set = set(json.dumps(lesson, sort_keys=True) for lesson in old_lessons)
+        new_set = set(json.dumps(lesson, sort_keys=True) for lesson in new_lessons)
+        
+        added_lessons_json = new_set - old_set
+        removed_lessons_json = old_set - new_set
+        
+        if added_lessons_json or removed_lessons_json:
+            print(f"ЛОГ: Обнаружены изменения в расписании для группы {group_name}")
+            
+            change_message = f"🔄 <b>Обновление расписания для группы {group_name}</b>\n\n"
+            
+            if added_lessons_json:
+                change_message += "🟢 <b>Добавлено:</b>\n"
+                for lesson_json in added_lessons_json:
+                    lesson = json.loads(lesson_json)
+                    change_message += f"- {lesson.get('date')} | {lesson.get('subjectFull')}\n"
+            
+            if removed_lessons_json:
+                if added_lessons_json:
+                    change_message += "\n"
+                change_message += "🔴 <b>Удалено:</b>\n"
+                for lesson_json in removed_lessons_json:
+                    lesson = json.loads(lesson_json)
+                    change_message += f"- {lesson.get('date')} | {lesson.get('subjectFull')}\n"
+            
             users = get_db_connection().execute('SELECT user_id FROM users WHERE group_name = ?', (group_name,)).fetchall()
             for user in users:
                 try:
                     await context.bot.send_message(
                         user['user_id'],
-                        "🔄 Обнаружены изменения в расписании. Используйте команду /start для обновления."
+                        change_message,
+                        parse_mode='HTML'
                     )
                 except Exception as e:
                     print(f"ОШИБКА: Не удалось отправить уведомление пользователю {user['user_id']}: {e}")
+
+    schedule_cache = new_schedule
+    last_schedule_check = datetime.now(YEKATERINBURG_TZ)
 
 async def send_daily_schedule(context: ContextTypes.DEFAULT_TYPE):
     """Sends daily schedule at 19:00"""
@@ -384,16 +407,18 @@ async def send_daily_schedule(context: ContextTypes.DEFAULT_TYPE):
     
     # Send tomorrow's schedule
     for group_name in schedule_cache.keys():
-        lessons = schedule_cache[group_name]
+        lessons = schedule_cache.get(group_name)
+        if not lessons:
+            continue
+
         tomorrow_lessons = filter_tomorrow_lessons(lessons)
         
         if tomorrow_lessons:
             schedule_text = format_schedule(tomorrow_lessons, f"📅 Расписание на завтра ({group_name})")
             
-            # Add homework information
             homeworks = get_homeworks(group_name)
             if homeworks:
-                homework_text = "\n\n📝 <b>Домашние задания на завтра:</b>\n"
+                homework_text = "\n\n📝 <b>Домашние задания:</b>\n"
                 for hw in homeworks[:3]:
                     homework_text += f"• {hw['subject']}: {hw['task']} (до {hw['deadline']})\n"
                 schedule_text += homework_text
@@ -409,9 +434,11 @@ async def send_morning_schedule(context: ContextTypes.DEFAULT_TYPE):
     """Sends morning schedule at 07:00"""
     print("ЛОГ: Отправка утреннего расписания...")
     
-    # Send today's schedule
     for group_name in schedule_cache.keys():
-        lessons = schedule_cache[group_name]
+        lessons = schedule_cache.get(group_name)
+        if not lessons:
+            continue
+
         today_lessons = filter_today_lessons(lessons)
         
         if today_lessons:
@@ -430,46 +457,44 @@ async def check_next_lesson(context: ContextTypes.DEFAULT_TYPE):
     
     now = datetime.now(YEKATERINBURG_TZ)
     
-    for group_name in schedule_cache.keys():
-        lessons = schedule_cache[group_name]
+    users_with_groups = get_db_connection().execute('SELECT user_id, group_name FROM users').fetchall()
+    
+    for user in users_with_groups:
+        user_id = user['user_id']
+        group_name = user['group_name']
+        
+        lessons = schedule_cache.get(group_name)
+        if not lessons:
+            continue
+
         today_lessons = filter_today_lessons(lessons)
         
         if not today_lessons:
             continue
             
-        # Find current and next lessons
         for i, lesson in enumerate(today_lessons):
             try:
                 lesson_number = lesson.get('lessonNumber', 0)
-                start_time, end_time = get_lesson_time(lesson_number)
+                start_time_str, _ = get_lesson_time(lesson_number)
                 
-                # ИСПРАВЛЕНИЕ: Создаем "осознанное" время для сравнения
-                end_time_naive = datetime.strptime(end_time, '%H:%M').time()
-                end_time_aware = datetime.combine(now.date(), end_time_naive).replace(tzinfo=YEKATERINBURG_TZ)
+                start_time_naive = datetime.strptime(start_time_str, '%H:%M').time()
+                start_time_aware = datetime.combine(now.date(), start_time_naive).replace(tzinfo=YEKATERINBURG_TZ)
                 
-                # Check if lesson just ended (within last minute)
-                if end_time_aware <= now <= end_time_aware + timedelta(minutes=1):
+                # Check if it's 5 minutes before the start of a lesson
+                if now + timedelta(minutes=5) >= start_time_aware and now < start_time_aware:
+                    next_lesson_text = (
+                        f"📅 <b>Начало следующей пары через 5 минут ({group_name})</b>\n\n"
+                        f"    ⏰ {get_lesson_time(lesson_number)[0]}-{get_lesson_time(lesson_number)[1]} | {lesson_number} пара\n"
+                        f"    📚 {lesson.get('subjectFull', 'N/A')}\n"
+                        f"    👨‍🏫 {lesson.get('teacher', 'N/A')}\n"
+                        f"    🚪 {lesson.get('room', 'N/A')}\n"
+                    )
                     
-                    # Check if there's a next lesson
-                    if i + 1 < len(today_lessons):
-                        next_lesson = today_lessons[i + 1]
-                        next_lesson_number = next_lesson.get('lessonNumber', 0)
-                        next_start_time, next_end_time = get_lesson_time(next_lesson_number)
-                        
-                        next_lesson_text = (
-                            f"📅 <b>Следующая пара ({group_name})</b>\n\n"
-                            f"    ⏰ {next_start_time}-{next_end_time} | {next_lesson_number} пара\n"
-                            f"    📚 {next_lesson.get('subjectFull', 'N/A')}\n"
-                            f"    👨‍🏫 {next_lesson.get('teacher', 'N/A')}\n"
-                            f"    🚪 {next_lesson.get('room', 'N/A')}\n"
-                        )
-                        
-                        users = get_db_connection().execute('SELECT user_id FROM users WHERE group_name = ?', (group_name,)).fetchall()
-                        for user in users:
-                            try:
-                                await context.bot.send_message(user['user_id'], next_lesson_text, parse_mode='HTML')
-                            except Exception as e:
-                                print(f"ОШИБКА: Не удалось отправить уведомление о следующей паре пользователю {user['user_id']}: {e}")
+                    try:
+                        await context.bot.send_message(user_id, next_lesson_text, parse_mode='HTML')
+                    except Exception as e:
+                        print(f"ОШИБКА: Не удалось отправить уведомление о следующей паре пользователю {user_id}: {e}")
+
             except Exception as e:
                 print(f"ОШИБКА: Не удалось обработать пару: {e}")
                 continue
@@ -484,13 +509,11 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     add_user(user_id, user.username, user.first_name, user.last_name)
     user_data = get_user(user_id)
     
-    # If user doesn't have a valid group, ask for it
     if not user_data or user_data['group_name'] not in ALL_GROUPS:
         return await ask_user_group(update, context)
 
     print(f"ЛОГ: Пользователь {user.first_name} (ID: {user.id}) вернулся в главное меню.")
     
-    # Проверяем, совпадает ли роль в базе с ожидаемой для специальных пользователей
     if user_id in SPECIAL_USERS and user_data['role'] != SPECIAL_USERS[user_id]['role']:
         keyboard = [[InlineKeyboardButton("🔄 Принудительно исправить роль", callback_data=f"fix_role_{user_id}")]]
         reply_markup = InlineKeyboardMarkup(keyboard)
@@ -555,13 +578,13 @@ async def show_main_menu(update: Update, user_id: int):
     elif role == ROLE_PHYSICAL_ORGANIZER:
         welcome_text = "🏃 Добро пожаловать, Физ. орг.!"
 
-    if user_id == DEVELOPER_ID: # Developer-specific menu
+    if user_id == DEVELOPER_ID:
         keyboard = [
             ['📅 Расписание', '📝 ДЗ'],
             ['ℹ️ Информация', '💡 Предложения', '💡 Предложить идею'],
             ['📢 Отправить ДЗ', '📢 Отправить уведомление'],
             ['Удалить ДЗ', 'Удалить уведомление', 'Удалить предложения'],
-            ['Удалить пользователя'],
+            ['Удалить пользователя', 'Удалить спортивные уведомления'],
             ['💰 Дать денюжку'],
             ['🎓 Сменить группу']
         ]
@@ -578,11 +601,11 @@ async def show_main_menu(update: Update, user_id: int):
         keyboard = [
             ['📅 Расписание', '📝 ДЗ'],
             ['ℹ️ Информация', '💡 Предложения', '💡 Предложить идею'],
-            ['🏃 Отправить спортивное уведомление'],
+            ['🏃 Отправить спортивное уведомление', 'Удалить спортивные уведомления'],
             ['💰 Дать денюжку'],
             ['🎓 Сменить группу']
         ]
-    else: # Student menu
+    else:
         keyboard = [
             ['📅 Расписание', '📝 ДЗ'],
             ['ℹ️ Информация', '💡 Предложить идею'],
@@ -670,6 +693,12 @@ async def handle_simple_message(update: Update, context: ContextTypes.DEFAULT_TY
         
     elif text == 'Удалить предложения' and (user_id == DEVELOPER_ID or role == ROLE_IT_SPECIALIST):
         await delete_suggestions_menu(update, context)
+        
+    elif text == 'Удалить ДЗ' and (user_id == DEVELOPER_ID or role == ROLE_IT_SPECIALIST):
+        await delete_homework_menu(update, context)
+
+    elif text == 'Удалить уведомление' and (user_id == DEVELOPER_ID or role == ROLE_IT_SPECIALIST):
+        await delete_notification_menu(update, context)
 
     else:
         await update.message.reply_text("Используй кнопки для навигации 👇")
@@ -696,7 +725,7 @@ async def handle_schedule_period(update: Update, context: ContextTypes.DEFAULT_T
     await update.message.reply_text("⏳ Загружаю расписание...", reply_markup=ReplyKeyboardRemove())
     schedule = get_schedule(text, group_name)
     await update.message.reply_text(schedule, parse_mode='HTML')
-    await show_main_menu(update, update.effective_user.id) # Return to main menu after showing schedule
+    await show_main_menu(update, update.effective_user.id)
 
 # -------------------- DATABASE INTERACTION FUNCTIONS --------------------
 
@@ -834,8 +863,7 @@ async def handle_homework_input(update: Update, context: ContextTypes.DEFAULT_TY
     user_id = update.effective_user.id
     user_data = get_user(user_id)
     
-    # Проверяем права через SPECIAL_USERS, а не через роль в базе
-    if user_id not in [uid for uid in SPECIAL_USERS if SPECIAL_USERS[uid]['role'] == ROLE_IT_SPECIALIST]:
+    if user_id not in [uid for uid in SPECIAL_USERS if SPECIAL_USERS[uid]['role'] == ROLE_IT_SPECIALIST] and user_id != DEVELOPER_ID:
         await update.message.reply_text("У вас нет прав для этого действия.")
         return await cancel_conversation(update, context)
 
@@ -872,8 +900,7 @@ async def handle_notification_input(update: Update, context: ContextTypes.DEFAUL
     user_id = update.effective_user.id
     user_data = get_user(user_id)
     
-    # Проверяем права через SPECIAL_USERS, а не через роль в базе
-    if user_id not in [uid for uid in SPECIAL_USERS if SPECIAL_USERS[uid]['role'] == ROLE_IT_SPECIALIST]:
+    if user_id not in [uid for uid in SPECIAL_USERS if SPECIAL_USERS[uid]['role'] == ROLE_IT_SPECIALIST] and user_id != DEVELOPER_ID:
         await update.message.reply_text("У вас нет прав для этого действия.")
         return await cancel_conversation(update, context)
 
@@ -901,8 +928,7 @@ async def handle_sport_input(update: Update, context: ContextTypes.DEFAULT_TYPE)
     user_id = update.effective_user.id
     user_data = get_user(user_id)
     
-    # Проверяем права через SPECIAL_USERS, а не через роль в базе
-    if user_id not in [uid for uid in SPECIAL_USERS if SPECIAL_USERS[uid]['role'] == ROLE_PHYSICAL_ORGANIZER]:
+    if user_id not in [uid for uid in SPECIAL_USERS if SPECIAL_USERS[uid]['role'] == ROLE_PHYSICAL_ORGANIZER] and user_id != DEVELOPER_ID:
         await update.message.reply_text("У вас нет прав для этого действия.")
         return await cancel_conversation(update, context)
 
@@ -1014,7 +1040,8 @@ async def show_homework(update: Update, group_name: str):
         await update.message.reply_text("📭 Пока нет домашних заданий")
         return
     
-    for hw in homeworks[:3]: # Show recent 3
+    # Iterate through all homeworks, not just the first 3
+    for hw in homeworks:
         hw_text = (
             f"📝 <b>Домашнее задание</b>\n"
             f"📚 <b>Предмет:</b> {hw['subject']}\n"
@@ -1028,8 +1055,7 @@ async def show_homework(update: Update, group_name: str):
         else:
             await update.message.reply_text(hw_text, parse_mode='HTML')
     
-    if len(homeworks) > 3:
-        await update.message.reply_text(f"📊 <b>Показано 3 из {len(homeworks)} заданий</b>", parse_mode='HTML')
+    await update.message.reply_text(f"📊 <b>Показано:</b> {len(homeworks)} заданий", parse_mode='HTML')
 
 async def show_information(update: Update, group_name: str, role: str):
     """Shows information for the user"""
@@ -1134,12 +1160,10 @@ async def delete_notification_menu(update: Update, context: ContextTypes.DEFAULT
         return ConversationHandler.END
 
     keyboard = []
-    # Add regular notifications
     for n in notifications[:5]:
         button_text = f"📢 {n['message'][:20]}..."
         keyboard.append([InlineKeyboardButton(button_text, callback_data=f"del_notif_{n['id']}")])
     
-    # Add sport notifications
     for s in sport_notifications[:5]:
         button_text = f"🏃 {s['message'][:20]}..."
         keyboard.append([InlineKeyboardButton(button_text, callback_data=f"del_sport_{s['id']}")])
@@ -1246,12 +1270,10 @@ async def handle_role_fix_callback(update: Update, context: ContextTypes.DEFAULT
     parts = query.data.split('_')
     user_id = int(parts[2])
     
-    # Проверяем, что запрос от того же пользователя
     if query.from_user.id != user_id:
         await query.edit_message_text("❌ Вы не можете исправить роль другого пользователя.")
         return
     
-    # Обновляем пользователя
     user = query.from_user
     add_user(user_id, user.username, user.first_name, user.last_name)
     
@@ -1260,7 +1282,6 @@ async def handle_role_fix_callback(update: Update, context: ContextTypes.DEFAULT
 
 # -------------------- JOB QUEUE FUNCTIONS --------------------
 
-# ИСПРАВЛЕНО: Функция теперь принимает аргумент 'application', как того требует post_init
 async def init_schedule_cache(application):
     """Initializes the schedule cache"""
     global schedule_cache, last_schedule_check
@@ -1276,17 +1297,14 @@ def main():
     """Main function to run the bot"""
     init_db()
     
-    # ИСПРАВЛЕНО: Асинхронная инициализация кэша передается в post_init
     app = Application.builder().token(BOT_TOKEN).post_init(init_schedule_cache).build()
     
-    # Add job queue handlers
     job_queue = app.job_queue
-    job_queue.run_repeating(check_schedule_changes, interval=3600, first=10)  # Check every hour
-    job_queue.run_daily(send_daily_schedule, time=datetime.strptime("19:00", "%H:%M").time(), days=(0, 1, 2, 3, 4, 5, 6))
-    job_queue.run_daily(send_morning_schedule, time=datetime.strptime("07:00", "%H:%M").time(), days=(0, 1, 2, 3, 4, 5, 6))
-    job_queue.run_repeating(check_next_lesson, interval=60, first=10)  # Check every minute
+    job_queue.run_repeating(check_schedule_changes, interval=3600, first=10)
+    job_queue.run_daily(send_daily_schedule, time=time(hour=19, minute=0, tzinfo=YEKATERINBURG_TZ), days=(0, 1, 2, 3, 4, 5, 6))
+    job_queue.run_daily(send_morning_schedule, time=time(hour=7, minute=0, tzinfo=YEKATERINBURG_TZ), days=(0, 1, 2, 3, 4, 5, 6))
+    job_queue.run_repeating(check_next_lesson, interval=60, first=10)
     
-    # ConversationHandler for managing dialogs
     conv_handler = ConversationHandler(
         entry_points=[
             CommandHandler('start', start_command),
@@ -1320,13 +1338,8 @@ def main():
         allow_reentry=True
     )
     
-    # Add the conversation handler first
     app.add_handler(conv_handler)
-    
-    # Add callback handler for role fix
     app.add_handler(CallbackQueryHandler(handle_role_fix_callback, pattern='^fix_role_'))
-    
-    # Then add the general message handler for non-conversation buttons
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_simple_message))
     
     print("ЛОГ: Бот запущен!")
