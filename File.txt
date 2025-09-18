@@ -14,7 +14,7 @@ YEKATERINBURG_TZ = timezone(timedelta(hours=5))
 DEFAULT_GROUP = "ИД-127"
 
 # States for ConversationHandler
-AWAITING_HOMEWORK, AWAITING_INFO, AWAITING_SPORT, AWAITING_SUGGESTION, AWAITING_HOMEWORK_DELETE, AWAITING_INFO_DELETE, AWAITING_SPORT_DELETE, AWAITING_GROUP, AWAITING_USER_DELETE, AWAITING_SUGGESTION_DELETE = range(10)
+AWAITING_HOMEWORK, AWAITING_INFO, AWAITING_SPORT, AWAITING_SUGGESTION, AWAITING_HOMEWORK_DELETE, AWAITING_INFO_DELETE, AWAITING_SPORT_DELETE, AWAITING_USER_DELETE, AWAITING_SUGGESTION_DELETE, AWAITING_GROUP = range(10)
 
 # User Roles
 ROLE_STUDENT = 'student'
@@ -44,172 +44,243 @@ ALL_GROUPS = [
 schedule_cache = {}
 last_schedule_check = None
 
+# User notifications cache to prevent duplicate messages
+user_notification_cache = {}
+
 # -------------------- DATABASE FUNCTIONS --------------------
 
 def init_db():
     """Initializes the database"""
-    conn = sqlite3.connect('bot_data.db')
-    cur = conn.cursor()
-    
-    # Users table
-    cur.execute('''CREATE TABLE IF NOT EXISTS users (
-        user_id INTEGER PRIMARY KEY,
-        username TEXT,
-        first_name TEXT,
-        last_name TEXT,
-        group_name TEXT,
-        role TEXT DEFAULT 'student',
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-    )''')
-    
-    # Homeworks table
-    cur.execute('''CREATE TABLE IF NOT EXISTS homeworks (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        subject TEXT,
-        task TEXT,
-        deadline TEXT,
-        group_name TEXT,
-        added_by INTEGER,
-        photo_id TEXT,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        FOREIGN KEY (added_by) REFERENCES users (user_id)
-    )''')
-    
-    # Notifications table (from IT specialists)
-    cur.execute('''CREATE TABLE IF NOT EXISTS notifications (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        message TEXT,
-        group_name TEXT,
-        added_by INTEGER,
-        photo_id TEXT,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        FOREIGN KEY (added_by) REFERENCES users (user_id)
-    )''')
-    
-    # Sport notifications table (from physical organizer)
-    cur.execute('''CREATE TABLE IF NOT EXISTS sport_notifications (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        message TEXT,
-        group_name TEXT,
-        added_by INTEGER,
-        photo_id TEXT,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        FOREIGN KEY (added_by) REFERENCES users (user_id)
-    )''')
-    
-    # Suggestions table
-    cur.execute('''CREATE TABLE IF NOT EXISTS suggestions (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        user_id INTEGER,
-        message TEXT,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        FOREIGN KEY (user_id) REFERENCES users (user_id)
-    )''')
-    
-    conn.commit()
-    conn.close()
-    print("ЛОГ: База данных инициализирована.")
+    conn = None
+    try:
+        conn = sqlite3.connect('bot_data.db')
+        cur = conn.cursor()
+        
+        # Users table
+        cur.execute('''CREATE TABLE IF NOT EXISTS users (
+            user_id INTEGER PRIMARY KEY,
+            username TEXT,
+            first_name TEXT,
+            last_name TEXT,
+            group_name TEXT,
+            role TEXT DEFAULT 'student',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )''')
+        
+        # Homeworks table
+        cur.execute('''CREATE TABLE IF NOT EXISTS homeworks (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            subject TEXT,
+            task TEXT,
+            deadline TEXT,
+            group_name TEXT,
+            added_by INTEGER,
+            photo_id TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (added_by) REFERENCES users (user_id)
+        )''')
+        
+        # Notifications table (from IT specialists)
+        cur.execute('''CREATE TABLE IF NOT EXISTS notifications (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            message TEXT,
+            group_name TEXT,
+            added_by INTEGER,
+            photo_id TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (added_by) REFERENCES users (user_id)
+        )''')
+        
+        # Sport notifications table (from physical organizer)
+        cur.execute('''CREATE TABLE IF NOT EXISTS sport_notifications (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            message TEXT,
+            group_name TEXT,
+            added_by INTEGER,
+            photo_id TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (added_by) REFERENCES users (user_id)
+        )''')
+        
+        # Suggestions table
+        cur.execute('''CREATE TABLE IF NOT EXISTS suggestions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER,
+            message TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (user_id) REFERENCES users (user_id)
+        )''')
+        
+        conn.commit()
+        print("ЛОГ: База данных инициализирована.")
+    except sqlite3.Error as e:
+        print(f"ОШИБКА: Ошибка базы данных при инициализации: {e}")
+    finally:
+        if conn:
+            conn.close()
 
 def get_db_connection():
     """Creates a connection to the database"""
-    conn = sqlite3.connect('bot_data.db')
-    conn.row_factory = sqlite3.Row
-    return conn
+    try:
+        conn = sqlite3.connect('bot_data.db')
+        conn.row_factory = sqlite3.Row
+        return conn
+    except sqlite3.Error as e:
+        print(f"ОШИБКА: Ошибка базы данных при подключении: {e}")
+        return None
 
 def get_user(user_id):
     """Gets user information"""
     conn = get_db_connection()
-    user = conn.execute('SELECT * FROM users WHERE user_id = ?', (user_id,)).fetchone()
-    conn.close()
-    return user
+    if not conn: return None
+    try:
+        user = conn.execute('SELECT * FROM users WHERE user_id = ?', (user_id,)).fetchone()
+        return user
+    except sqlite3.Error as e:
+        print(f"ОШИБКА: Ошибка базы данных при получении пользователя: {e}")
+        return None
+    finally:
+        conn.close()
 
 def get_all_users():
     """Gets a list of all users"""
     conn = get_db_connection()
-    users = conn.execute('SELECT user_id, first_name, username, group_name FROM users').fetchall()
-    conn.close()
-    return users
+    if not conn: return []
+    try:
+        users = conn.execute('SELECT user_id, first_name, username, group_name FROM users').fetchall()
+        return users
+    except sqlite3.Error as e:
+        print(f"ОШИБКА: Ошибка базы данных при получении списка пользователей: {e}")
+        return []
+    finally:
+        conn.close()
 
 def add_user(user_id, username, first_name, last_name):
     """Adds a new user to the database or updates existing user"""
     conn = get_db_connection()
-    
-    existing_user = conn.execute('SELECT * FROM users WHERE user_id = ?', (user_id,)).fetchone()
-    
-    role = ROLE_STUDENT
-    if user_id in SPECIAL_USERS:
-        role = SPECIAL_USERS[user_id]['role']
-    
-    if not existing_user:
-        conn.execute('''INSERT INTO users (user_id, username, first_name, last_name, group_name, role)
-                     VALUES (?, ?, ?, ?, ?, ?)''',
-                     (user_id, username, first_name, last_name, DEFAULT_GROUP, role))
-        print(f"ЛОГ: Добавлен новый пользователь: {first_name} (ID: {user_id}) с группой {DEFAULT_GROUP} и ролью {role}")
-    else:
-        conn.execute('''UPDATE users 
-                     SET username = ?, first_name = ?, last_name = ?, role = ?
-                     WHERE user_id = ?''',
-                     (username, first_name, last_name, role, user_id))
-        print(f"ЛОГ: Обновлен пользователь: {first_name} (ID: {user_id}), роль: {role}")
-    
-    conn.commit()
-    conn.close()
+    if not conn: return
+    try:
+        existing_user = conn.execute('SELECT * FROM users WHERE user_id = ?', (user_id,)).fetchone()
+        
+        role = ROLE_STUDENT
+        if user_id in SPECIAL_USERS:
+            role = SPECIAL_USERS[user_id]['role']
+        
+        if not existing_user:
+            conn.execute('''INSERT INTO users (user_id, username, first_name, last_name, group_name, role)
+                         VALUES (?, ?, ?, ?, ?, ?)''',
+                         (user_id, username, first_name, last_name, DEFAULT_GROUP, role))
+            print(f"ЛОГ: Добавлен новый пользователь: {first_name} (ID: {user_id}) с группой {DEFAULT_GROUP} и ролью {role}")
+        else:
+            conn.execute('''UPDATE users 
+                         SET username = ?, first_name = ?, last_name = ?, role = ?
+                         WHERE user_id = ?''',
+                         (username, first_name, last_name, role, user_id))
+            print(f"ЛОГ: Обновлен пользователь: {first_name} (ID: {user_id}), роль: {role}")
+        
+        conn.commit()
+    except sqlite3.Error as e:
+        print(f"ОШИБКА: Ошибка базы данных при добавлении пользователя: {e}")
+    finally:
+        conn.close()
 
 def update_user_group(user_id, group_name):
     """Updates the user's group"""
     conn = get_db_connection()
-    conn.execute('UPDATE users SET group_name = ? WHERE user_id = ?', (group_name, user_id))
-    conn.commit()
-    conn.close()
-    print(f"ЛОГ: Пользователь {user_id} сменил группу на {group_name}")
+    if not conn: return
+    try:
+        conn.execute('UPDATE users SET group_name = ? WHERE user_id = ?', (group_name, user_id))
+        conn.commit()
+        print(f"ЛОГ: Пользователь {user_id} сменил группу на {group_name}")
+    except sqlite3.Error as e:
+        print(f"ОШИБКА: Ошибка базы данных при обновлении группы: {e}")
+    finally:
+        conn.close()
     
 def get_total_user_count():
     """Gets the total number of users in the database"""
     conn = get_db_connection()
-    count = conn.execute('SELECT COUNT(*) FROM users').fetchone()[0]
-    conn.close()
-    return count
+    if not conn: return 0
+    try:
+        count = conn.execute('SELECT COUNT(*) FROM users').fetchone()[0]
+        return count
+    except sqlite3.Error as e:
+        print(f"ОШИБКА: Ошибка базы данных при подсчете пользователей: {e}")
+        return 0
+    finally:
+        conn.close()
     
 def delete_homework(hw_id):
     conn = get_db_connection()
-    conn.execute('DELETE FROM homeworks WHERE id = ?', (hw_id,))
-    conn.commit()
-    conn.close()
+    if not conn: return
+    try:
+        conn.execute('DELETE FROM homeworks WHERE id = ?', (hw_id,))
+        conn.commit()
+    except sqlite3.Error as e:
+        print(f"ОШИБКА: Ошибка базы данных при удалении ДЗ: {e}")
+    finally:
+        conn.close()
 
 def delete_notification(notif_id):
     conn = get_db_connection()
-    conn.execute('DELETE FROM notifications WHERE id = ?', (notif_id,))
-    conn.commit()
-    conn.close()
+    if not conn: return
+    try:
+        conn.execute('DELETE FROM notifications WHERE id = ?', (notif_id,))
+        conn.commit()
+    except sqlite3.Error as e:
+        print(f"ОШИБКА: Ошибка базы данных при удалении уведомления: {e}")
+    finally:
+        conn.close()
 
 def delete_sport_notification(notif_id):
     conn = get_db_connection()
-    conn.execute('DELETE FROM sport_notifications WHERE id = ?', (notif_id,))
-    conn.commit()
-    conn.close()
+    if not conn: return
+    try:
+        conn.execute('DELETE FROM sport_notifications WHERE id = ?', (notif_id,))
+        conn.commit()
+    except sqlite3.Error as e:
+        print(f"ОШИБКА: Ошибка базы данных при удалении спортивного уведомления: {e}")
+    finally:
+        conn.close()
 
 def delete_user(user_id):
     conn = get_db_connection()
-    conn.execute('DELETE FROM users WHERE user_id = ?', (user_id,))
-    conn.commit()
-    conn.close()
-    print(f"ЛОГ: Пользователь {user_id} удален из базы данных.")
+    if not conn: return
+    try:
+        conn.execute('DELETE FROM users WHERE user_id = ?', (user_id,))
+        conn.commit()
+        print(f"ЛОГ: Пользователь {user_id} удален из базы данных.")
+    except sqlite3.Error as e:
+        print(f"ОШИБКА: Ошибка базы данных при удалении пользователя: {e}")
+    finally:
+        conn.close()
 
 def delete_suggestion(suggestion_id):
     conn = get_db_connection()
-    conn.execute('DELETE FROM suggestions WHERE id = ?', (suggestion_id,))
-    conn.commit()
-    conn.close()
-    print(f"ЛОГ: Предложение {suggestion_id} удалено из базы данных.")
+    if not conn: return
+    try:
+        conn.execute('DELETE FROM suggestions WHERE id = ?', (suggestion_id,))
+        conn.commit()
+        print(f"ЛОГ: Предложение {suggestion_id} удалено из базы данных.")
+    except sqlite3.Error as e:
+        print(f"ОШИБКА: Ошибка базы данных при удалении предложения: {e}")
+    finally:
+        conn.close()
 
 def get_all_sport_notifications():
     """Gets all sport notifications"""
     conn = get_db_connection()
-    notifications = conn.execute('''SELECT s.*, u.first_name 
-                                 FROM sport_notifications s JOIN users u ON s.added_by = u.user_id 
-                                 ORDER BY s.created_at DESC''').fetchall()
-    conn.close()
-    return notifications
+    if not conn: return []
+    try:
+        notifications = conn.execute('''SELECT s.*, u.first_name 
+                                     FROM sport_notifications s JOIN users u ON s.added_by = u.user_id 
+                                     ORDER BY s.created_at DESC''').fetchall()
+        return notifications
+    except sqlite3.Error as e:
+        print(f"ОШИБКА: Ошибка базы данных при получении спортивных уведомлений: {e}")
+        return []
+    finally:
+        conn.close()
 
 # -------------------- SCHEDULE FUNCTIONS --------------------
 
@@ -231,8 +302,14 @@ def fetch_schedule_data():
         schedule_json_str = schedule_raw.replace(";", "")
         return json.loads(schedule_json_str)
     
+    except requests.exceptions.RequestException as e:
+        print(f"ОШИБКА: Ошибка сети при загрузке расписания: {e}")
+        return None
+    except (json.JSONDecodeError, IndexError) as e:
+        print(f"ОШИБКА: Ошибка обработки данных расписания: {e}")
+        return None
     except Exception as e:
-        print(f"ОШИБКА: Не удалось загрузить расписание: {e}")
+        print(f"ОШИБКА: Неизвестная ошибка при загрузке расписания: {e}")
         return None
 
 def filter_today_lessons(lessons):
@@ -251,13 +328,23 @@ def filter_week_lessons(lessons):
     week_end = today_yekat + timedelta(days=7)
     return [lesson for lesson in lessons if lesson.get('date') and today_yekat <= datetime.fromisoformat(lesson['date'].replace('Z', '+00:00')).astimezone(YEKATERINBURG_TZ).date() <= week_end]
 
-def get_lesson_time(lesson_number):
-    """Returns the time of a lesson by its number"""
+def get_lesson_time(lesson_number, day_of_week):
+    """Returns the time of a lesson by its number, adjusted for Saturday"""
+    # Standard schedule (Monday-Friday)
     lesson_times = {
         1: ("08:30", "10:05"), 2: ("10:15", "11:50"), 3: ("12:40", "14:15"),
         4: ("14:25", "16:00"), 5: ("16:10", "17:45"), 6: ("17:55", "19:30"),
     }
-    return lesson_times.get(lesson_number, ("❓", "❓"))
+    # Saturday schedule
+    saturday_times = {
+        1: ("8:30", "9:45"), 2: ("9:55", "11:10"), 3: ("11:20", "12:40"), 
+        4: ("13:20", "14:35"), 5: ("14:45", "16:00"), 6: ("16:10", "17:25")
+    }
+
+    if day_of_week == 5: # 5 is Saturday
+        return saturday_times.get(lesson_number, ("❓", "❓"))
+    else:
+        return lesson_times.get(lesson_number, ("❓", "❓"))
 
 def format_schedule(lessons, title):
     if not lessons:
@@ -276,11 +363,12 @@ def format_schedule(lessons, title):
             if date_str != current_date:
                 current_date = date_str
                 day_names = ['Понедельник', 'Вторник', 'Среда', 'Четверг', 'Пятница', 'Суббота', 'Воскресенье']
-                day_of_week = day_names[lesson_date_yekat.weekday()]
+                day_of_week_num = lesson_date_yekat.weekday()
+                day_of_week = day_names[day_of_week_num]
                 result.append(f"\n📅 <b>{date_str} ({day_of_week})</b>")
             
             lesson_number = lesson.get('lessonNumber', 0)
-            start_time, end_time = get_lesson_time(lesson_number)
+            start_time, end_time = get_lesson_time(lesson_number, day_of_week_num)
             
             lesson_text = (
                 f"    ⏰ {start_time}-{end_time} | {lesson_number} пара\n"
@@ -301,7 +389,6 @@ def get_schedule(period, group_name):
     try:
         global schedule_cache, last_schedule_check
         
-        # Check if we need to refresh the cache (every hour)
         now = datetime.now(YEKATERINBURG_TZ)
         if last_schedule_check is None or (now - last_schedule_check).total_seconds() > 3600:
             schedule_data = fetch_schedule_data()
@@ -356,12 +443,10 @@ async def check_schedule_changes(context: ContextTypes.DEFAULT_TYPE):
         print("ЛОГ: Не удалось проверить изменения расписания")
         return
 
-    # Check for changes in each group
     for group_name in new_schedule.keys():
         old_lessons = schedule_cache.get(group_name, [])
         new_lessons = new_schedule.get(group_name, [])
         
-        # Simple comparison to find what has been added or removed
         old_set = set(json.dumps(lesson, sort_keys=True) for lesson in old_lessons)
         new_set = set(json.dumps(lesson, sort_keys=True) for lesson in new_lessons)
         
@@ -405,7 +490,6 @@ async def send_daily_schedule(context: ContextTypes.DEFAULT_TYPE):
     """Sends daily schedule at 19:00"""
     print("ЛОГ: Отправка ежедневного расписания...")
     
-    # Send tomorrow's schedule
     for group_name in schedule_cache.keys():
         lessons = schedule_cache.get(group_name)
         if not lessons:
@@ -453,9 +537,12 @@ async def send_morning_schedule(context: ContextTypes.DEFAULT_TYPE):
 
 async def check_next_lesson(context: ContextTypes.DEFAULT_TYPE):
     """Checks and sends notification about next lesson"""
+    global schedule_cache, user_notification_cache
+    
     print("ЛОГ: Проверка следующей пары...")
     
     now = datetime.now(YEKATERINBURG_TZ)
+    today_date = now.date()
     
     users_with_groups = get_db_connection().execute('SELECT user_id, group_name FROM users').fetchall()
     
@@ -475,16 +562,22 @@ async def check_next_lesson(context: ContextTypes.DEFAULT_TYPE):
         for i, lesson in enumerate(today_lessons):
             try:
                 lesson_number = lesson.get('lessonNumber', 0)
-                start_time_str, _ = get_lesson_time(lesson_number)
+                
+                notification_key = f"{user_id}_{today_date}_{lesson_number}"
+                
+                if user_notification_cache.get(notification_key) is True:
+                    continue
+
+                day_of_week_num = now.weekday()
+                start_time_str, _ = get_lesson_time(lesson_number, day_of_week_num)
                 
                 start_time_naive = datetime.strptime(start_time_str, '%H:%M').time()
                 start_time_aware = datetime.combine(now.date(), start_time_naive).replace(tzinfo=YEKATERINBURG_TZ)
                 
-                # Check if it's 5 minutes before the start of a lesson
                 if now + timedelta(minutes=5) >= start_time_aware and now < start_time_aware:
                     next_lesson_text = (
                         f"📅 <b>Начало следующей пары через 5 минут ({group_name})</b>\n\n"
-                        f"    ⏰ {get_lesson_time(lesson_number)[0]}-{get_lesson_time(lesson_number)[1]} | {lesson_number} пара\n"
+                        f"    ⏰ {get_lesson_time(lesson_number, day_of_week_num)[0]}-{get_lesson_time(lesson_number, day_of_week_num)[1]} | {lesson_number} пара\n"
                         f"    📚 {lesson.get('subjectFull', 'N/A')}\n"
                         f"    👨‍🏫 {lesson.get('teacher', 'N/A')}\n"
                         f"    🚪 {lesson.get('room', 'N/A')}\n"
@@ -492,12 +585,16 @@ async def check_next_lesson(context: ContextTypes.DEFAULT_TYPE):
                     
                     try:
                         await context.bot.send_message(user_id, next_lesson_text, parse_mode='HTML')
+                        user_notification_cache[notification_key] = True
                     except Exception as e:
                         print(f"ОШИБКА: Не удалось отправить уведомление о следующей паре пользователю {user_id}: {e}")
-
+                        
             except Exception as e:
                 print(f"ОШИБКА: Не удалось обработать пару: {e}")
                 continue
+                
+    if now.hour == 0 and now.minute == 0:
+        user_notification_cache.clear()
 
 # -------------------- CORE BOT FUNCTIONS --------------------
 
@@ -567,6 +664,10 @@ async def handle_group_selection(update: Update, context: ContextTypes.DEFAULT_T
 async def show_main_menu(update: Update, user_id: int):
     """Displays the main menu based on user rights"""
     user_data = get_user(user_id)
+    if not user_data:
+        await update.message.reply_text("Произошла ошибка, попробуйте /start еще раз.")
+        return
+
     role = user_data['role']
     
     welcome_text = "👋 Добро пожаловать!"
@@ -585,7 +686,7 @@ async def show_main_menu(update: Update, user_id: int):
             ['📢 Отправить ДЗ', '📢 Отправить уведомление'],
             ['Удалить ДЗ', 'Удалить уведомление', 'Удалить предложения'],
             ['Удалить пользователя', 'Удалить спортивные уведомления', 'Список пользователей'],
-            ['💰 Дать денюжку'],
+            ['💰 Дать денюжку', '🔔 Расписание звонков'],
             ['🎓 Сменить группу']
         ]
     elif role == ROLE_IT_SPECIALIST:
@@ -594,7 +695,7 @@ async def show_main_menu(update: Update, user_id: int):
             ['ℹ️ Информация', '💡 Предложения', '💡 Предложить идею'],
             ['📢 Отправить ДЗ', '📢 Отправить уведомление'],
             ['Удалить ДЗ', 'Удалить уведомление', 'Удалить предложения'],
-            ['💰 Дать денюжку'],
+            ['💰 Дать денюжку', '🔔 Расписание звонков'],
             ['🎓 Сменить группу']
         ]
     elif role == ROLE_PHYSICAL_ORGANIZER:
@@ -602,14 +703,14 @@ async def show_main_menu(update: Update, user_id: int):
             ['📅 Расписание', '📝 ДЗ'],
             ['ℹ️ Информация', '💡 Предложения', '💡 Предложить идею'],
             ['🏃 Отправить спортивное уведомление', 'Удалить спортивные уведомления'],
-            ['💰 Дать денюжку'],
+            ['💰 Дать денюжку', '🔔 Расписание звонков'],
             ['🎓 Сменить группу']
         ]
     else:
         keyboard = [
             ['📅 Расписание', '📝 ДЗ'],
             ['ℹ️ Информация', '💡 Предложить идею'],
-            ['💰 Дать денюжку'],
+            ['💰 Дать денюжку', '🔔 Расписание звонков'],
             ['📞 Связаться со старостой', '📞 Связаться с замом старосты'],
             ['📞 Связаться с физоргом'],
             ['🎓 Сменить группу']
@@ -621,7 +722,6 @@ async def show_main_menu(update: Update, user_id: int):
     await message_source.reply_text(welcome_text, reply_markup=reply_markup)
 
     print(f"ЛОГ: Главное меню показано для пользователя {user_data['first_name']} (ID: {user_id}).")
-
 
 async def cancel_conversation(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Cancels the current conversation and returns to the main menu"""
@@ -672,6 +772,9 @@ async def handle_simple_message(update: Update, context: ContextTypes.DEFAULT_TY
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
         await update.message.reply_text(donate_text, reply_markup=reply_markup)
+
+    elif text == '🔔 Расписание звонков':
+        await show_call_schedule(update)
     
     elif text == '📞 Связаться с физоргом':
         await contact_physical_organizer(update)
@@ -735,73 +838,117 @@ async def handle_schedule_period(update: Update, context: ContextTypes.DEFAULT_T
 def add_homework(subject, task, deadline, group_name, added_by, photo_id=None):
     """Adds homework to the database"""
     conn = get_db_connection()
-    conn.execute('''INSERT INTO homeworks (subject, task, deadline, group_name, added_by, photo_id)
-                 VALUES (?, ?, ?, ?, ?, ?)''', (subject, task, deadline, group_name, added_by, photo_id))
-    conn.commit()
-    conn.close()
-    print(f"ЛОГ: Добавлено ДЗ для группы {group_name}.")
+    if not conn: return
+    try:
+        conn.execute('''INSERT INTO homeworks (subject, task, deadline, group_name, added_by, photo_id)
+                     VALUES (?, ?, ?, ?, ?, ?)''', (subject, task, deadline, group_name, added_by, photo_id))
+        conn.commit()
+        print(f"ЛОГ: Добавлено ДЗ для группы {group_name}.")
+    except sqlite3.Error as e:
+        print(f"ОШИБКА: Ошибка базы данных при добавлении ДЗ: {e}")
+    finally:
+        conn.close()
 
 def get_homeworks(group_name):
     """Gets homework for a group"""
     conn = get_db_connection()
-    homeworks = conn.execute('''SELECT h.*, u.first_name 
-                             FROM homeworks h JOIN users u ON h.added_by = u.user_id 
-                             WHERE h.group_name = ? ORDER BY h.created_at DESC''', (group_name,)).fetchall()
-    conn.close()
-    return homeworks
+    if not conn: return []
+    try:
+        homeworks = conn.execute('''SELECT h.*, u.first_name 
+                                 FROM homeworks h JOIN users u ON h.added_by = u.user_id 
+                                 WHERE h.group_name = ? ORDER BY h.created_at DESC''', (group_name,)).fetchall()
+        return homeworks
+    except sqlite3.Error as e:
+        print(f"ОШИБКА: Ошибка базы данных при получении ДЗ: {e}")
+        return []
+    finally:
+        conn.close()
 
 def add_notification(message, group_name, added_by, photo_id=None):
     """Adds a notification to the database"""
     conn = get_db_connection()
-    conn.execute('''INSERT INTO notifications (message, group_name, added_by, photo_id)
-                 VALUES (?, ?, ?, ?)''', (message, group_name, added_by, photo_id))
-    conn.commit()
-    conn.close()
-    print(f"ЛОГ: Добавлено уведомление для группы {group_name}.")
+    if not conn: return
+    try:
+        conn.execute('''INSERT INTO notifications (message, group_name, added_by, photo_id)
+                     VALUES (?, ?, ?, ?)''', (message, group_name, added_by, photo_id))
+        conn.commit()
+        print(f"ЛОГ: Добавлено уведомление для группы {group_name}.")
+    except sqlite3.Error as e:
+        print(f"ОШИБКА: Ошибка базы данных при добавлении уведомления: {e}")
+    finally:
+        conn.close()
 
 def get_notifications(group_name):
     """Gets notifications for a group"""
     conn = get_db_connection()
-    notifications = conn.execute('''SELECT n.*, u.first_name 
-                                 FROM notifications n JOIN users u ON n.added_by = u.user_id 
-                                 WHERE n.group_name = ? ORDER BY n.created_at DESC''', (group_name,)).fetchall()
-    conn.close()
-    return notifications
+    if not conn: return []
+    try:
+        notifications = conn.execute('''SELECT n.*, u.first_name 
+                                     FROM notifications n JOIN users u ON n.added_by = u.user_id 
+                                     WHERE n.group_name = ? ORDER BY n.created_at DESC''', (group_name,)).fetchall()
+        return notifications
+    except sqlite3.Error as e:
+        print(f"ОШИБКА: Ошибка базы данных при получении уведомлений: {e}")
+        return []
+    finally:
+        conn.close()
 
 def add_sport_notification(message, group_name, added_by, photo_id=None):
     """Adds a sport notification to the database"""
     conn = get_db_connection()
-    conn.execute('''INSERT INTO sport_notifications (message, group_name, added_by, photo_id)
-                 VALUES (?, ?, ?, ?)''', (message, group_name, added_by, photo_id))
-    conn.commit()
-    conn.close()
-    print(f"ЛОГ: Добавлено спортивное уведомление для группы {group_name}.")
+    if not conn: return
+    try:
+        conn.execute('''INSERT INTO sport_notifications (message, group_name, added_by, photo_id)
+                     VALUES (?, ?, ?, ?)''', (message, group_name, added_by, photo_id))
+        conn.commit()
+        print(f"ЛОГ: Добавлено спортивное уведомление для группы {group_name}.")
+    except sqlite3.Error as e:
+        print(f"ОШИБКА: Ошибка базы данных при добавлении спортивного уведомления: {e}")
+    finally:
+        conn.close()
 
 def get_sport_notifications(group_name):
     """Gets sport notifications for a group"""
     conn = get_db_connection()
-    notifications = conn.execute('''SELECT s.*, u.first_name 
-                                 FROM sport_notifications s JOIN users u ON s.added_by = u.user_id 
-                                 WHERE s.group_name = ? ORDER BY s.created_at DESC''', (group_name,)).fetchall()
-    conn.close()
-    return notifications
+    if not conn: return []
+    try:
+        notifications = conn.execute('''SELECT s.*, u.first_name 
+                                     FROM sport_notifications s JOIN users u ON s.added_by = u.user_id 
+                                     WHERE s.group_name = ? ORDER BY s.created_at DESC''', (group_name,)).fetchall()
+        return notifications
+    except sqlite3.Error as e:
+        print(f"ОШИБКА: Ошибка базы данных при получении спортивных уведомлений: {e}")
+        return []
+    finally:
+        conn.close()
 
 def add_suggestion(user_id, message):
     """Adds a suggestion to the database"""
     conn = get_db_connection()
-    conn.execute('INSERT INTO suggestions (user_id, message) VALUES (?, ?)', (user_id, message))
-    conn.commit()
-    conn.close()
-    print(f"ЛОГ: Пользователь {user_id} отправил предложение.")
+    if not conn: return
+    try:
+        conn.execute('INSERT INTO suggestions (user_id, message) VALUES (?, ?)', (user_id, message))
+        conn.commit()
+        print(f"ЛОГ: Пользователь {user_id} отправил предложение.")
+    except sqlite3.Error as e:
+        print(f"ОШИБКА: Ошибка базы данных при добавлении предложения: {e}")
+    finally:
+        conn.close()
 
 def get_suggestions():
     """Gets all suggestions"""
     conn = get_db_connection()
-    suggestions = conn.execute('''SELECT s.*, u.first_name, u.username 
-                               FROM suggestions s JOIN users u ON s.user_id = u.user_id 
-                               ORDER BY s.created_at DESC''').fetchall()
-    conn.close()
-    return suggestions
+    if not conn: return []
+    try:
+        suggestions = conn.execute('''SELECT s.*, u.first_name, u.username 
+                                   FROM suggestions s JOIN users u ON s.user_id = u.user_id 
+                                   ORDER BY s.created_at DESC''').fetchall()
+        return suggestions
+    except sqlite3.Error as e:
+        print(f"ОШИБКА: Ошибка базы данных при получении предложений: {e}")
+        return []
+    finally:
+        conn.close()
 
 # -------------------- MESSAGE SENDING (DIALOG) FUNCTIONS --------------------
 
@@ -1043,7 +1190,6 @@ async def show_homework(update: Update, group_name: str):
         await update.message.reply_text("📭 Пока нет домашних заданий")
         return
     
-    # Iterate through all homeworks, not just the first 3
     for hw in homeworks:
         hw_text = (
             f"📝 <b>Домашнее задание</b>\n"
@@ -1124,6 +1270,44 @@ async def show_users_list(update: Update):
         )
     
     await update.message.reply_text(user_list_text, parse_mode='Markdown')
+
+async def show_call_schedule(update: Update):
+    """Shows the call schedule (звонки) based on day of week"""
+    now = datetime.now(YEKATERINBURG_TZ)
+    day_of_week = now.weekday()
+    
+    if day_of_week == 5:  # Saturday
+        schedule_text = (
+            "🔔 **Расписание звонков на субботу**\n\n"
+            "1 пара: **8:30 - 9:45**\n"
+            "Перемена: 10 минут\n"
+            "2 пара: **9:55 - 11:10**\n"
+            "Перемена: 10 минут\n"
+            "3 пара: **11:20 - 12:40**\n"
+            "Перемена: 40 минут - ОБЕД\n"
+            "4 пара: **13:20 - 14:35**\n"
+            "Перемена: 10 минут\n"
+            "5 пара: **14:45 - 16:00**\n"
+            "Перемена: 10 минут\n"
+            "6 пара: **16:10 - 17:25**\n"
+        )
+    else:
+        schedule_text = (
+            "🔔 **Расписание звонков (понедельник-пятница)**\n\n"
+            "1 пара: **8:30 - 10:05**\n"
+            "Перемена: 10 минут\n"
+            "2 пара: **10:15 - 11:50**\n"
+            "Перемена: 10 минут\n"
+            "3 пара: **12:40 - 14:15**\n"
+            "Перемена: 40 минут - ОБЕД\n"
+            "4 пара: **14:25 - 16:00**\n"
+            "Перемена: 10 минут\n"
+            "5 пара: **16:10 - 17:45**\n"
+            "Перемена: 10 минут\n"
+            "6 пара: **17:55 - 19:30**\n"
+        )
+    
+    await update.message.reply_text(schedule_text, parse_mode='Markdown')
 
 async def contact_physical_organizer(update: Update):
     """Contact the physical organizer"""
@@ -1254,7 +1438,6 @@ async def handle_delete_callback(update: Update, context: ContextTypes.DEFAULT_T
     await query.answer()
 
     parts = query.data.split('_')
-    action = parts[0]
     data_type = parts[1]
     item_id = int(parts[2])
     
