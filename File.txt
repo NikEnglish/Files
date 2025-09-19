@@ -5,7 +5,7 @@ import asyncio
 import requests
 import os
 from datetime import datetime, timedelta, timezone, time
-from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove, InlineKeyboardMarkup, InlineKeyboardButton
+from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove, InlineKeyboardMarkup, InlineKeyboardButton, Poll
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, ConversationHandler, CallbackQueryHandler
 
 # -------------------- CONSTANTS AND SETTINGS --------------------
@@ -14,7 +14,7 @@ YEKATERINBURG_TZ = timezone(timedelta(hours=5))
 DEFAULT_GROUP = "ИД-127"
 
 # States for ConversationHandler
-AWAITING_HOMEWORK, AWAITING_INFO, AWAITING_SPORT, AWAITING_SUGGESTION, AWAITING_HOMEWORK_DELETE, AWAITING_INFO_DELETE, AWAITING_SPORT_DELETE, AWAITING_USER_DELETE, AWAITING_SUGGESTION_DELETE, AWAITING_GROUP = range(10)
+AWAITING_HOMEWORK, AWAITING_INFO, AWAITING_SPORT, AWAITING_SUGGESTION, AWAITING_HOMEWORK_DELETE, AWAITING_INFO_DELETE, AWAITING_SPORT_DELETE, AWAITING_USER_DELETE, AWAITING_SUGGESTION_DELETE, AWAITING_GROUP, AWAITING_SUGGESTION_REPLY, AWAITING_POLL_QUESTION, AWAITING_POLL_OPTIONS = range(13)
 
 # User Roles
 ROLE_STUDENT = 'student'
@@ -47,6 +47,50 @@ last_schedule_check = None
 # User notifications cache to prevent duplicate messages
 user_notification_cache = {}
 
+# Anti-spam system
+user_spam_data = {}
+SPAM_THRESHOLD = 5
+SPAM_TIMEOUT_SECONDS = 10
+BLOCK_DURATIONS = {
+    1: 600,  # 10 minutes
+    2: 1800, # 30 minutes
+    3: 3600, # 1 hour
+    4: 7200, # 2 hours
+    5: 36000 # 10 hours
+}
+
+def is_spam(user_id):
+    """Checks if a user is spamming"""
+    now = datetime.now(YEKATERINBURG_TZ)
+    if user_id not in user_spam_data:
+        user_spam_data[user_id] = {'count': 1, 'last_time': now, 'warnings': 0, 'blocks': 0, 'block_until': None}
+        return False
+
+    data = user_spam_data[user_id]
+    
+    # Check if user is currently blocked
+    if data['block_until'] and now < data['block_until']:
+        return True
+    else:
+        data['block_until'] = None
+
+    time_diff = (now - data['last_time']).total_seconds()
+    if time_diff < SPAM_TIMEOUT_SECONDS:
+        data['count'] += 1
+    else:
+        data['count'] = 1
+    data['last_time'] = now
+
+    if data['count'] > SPAM_THRESHOLD:
+        return True
+    return False
+
+def get_block_duration(user_id):
+    data = user_spam_data.get(user_id, {})
+    block_count = data.get('blocks', 0)
+    duration = BLOCK_DURATIONS.get(block_count + 1, BLOCK_DURATIONS[5] * 2) # Default to a very long block if count is too high
+    return duration
+
 # -------------------- DATABASE FUNCTIONS --------------------
 
 def init_db():
@@ -75,7 +119,7 @@ def init_db():
             deadline TEXT,
             group_name TEXT,
             added_by INTEGER,
-            photo_id TEXT,
+            media_group_id TEXT,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (added_by) REFERENCES users (user_id)
         )''')
@@ -86,7 +130,7 @@ def init_db():
             message TEXT,
             group_name TEXT,
             added_by INTEGER,
-            photo_id TEXT,
+            media_group_id TEXT,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (added_by) REFERENCES users (user_id)
         )''')
@@ -97,7 +141,7 @@ def init_db():
             message TEXT,
             group_name TEXT,
             added_by INTEGER,
-            photo_id TEXT,
+            media_group_id TEXT,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (added_by) REFERENCES users (user_id)
         )''')
@@ -107,6 +151,7 @@ def init_db():
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             user_id INTEGER,
             message TEXT,
+            media_group_id TEXT,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (user_id) REFERENCES users (user_id)
         )''')
@@ -539,8 +584,6 @@ async def check_next_lesson(context: ContextTypes.DEFAULT_TYPE):
     """Checks and sends notification about next lesson"""
     global schedule_cache, user_notification_cache
     
-    print("ЛОГ: Проверка следующей пары...")
-    
     now = datetime.now(YEKATERINBURG_TZ)
     today_date = now.date()
     
@@ -684,8 +727,7 @@ async def show_main_menu(update: Update, user_id: int):
             ['📅 Расписание', '📝 ДЗ'],
             ['ℹ️ Информация', '💡 Предложения', '💡 Предложить идею'],
             ['📢 Отправить ДЗ', '📢 Отправить уведомление'],
-            ['Удалить ДЗ', 'Удалить уведомление', 'Удалить предложения'],
-            ['Удалить пользователя', 'Удалить спортивные уведомления', 'Список пользователей'],
+            ['Удалить', 'Создать опрос'],
             ['💰 Дать денюжку', '🔔 Расписание звонков'],
             ['🎓 Сменить группу']
         ]
@@ -694,7 +736,7 @@ async def show_main_menu(update: Update, user_id: int):
             ['📅 Расписание', '📝 ДЗ'],
             ['ℹ️ Информация', '💡 Предложения', '💡 Предложить идею'],
             ['📢 Отправить ДЗ', '📢 Отправить уведомление'],
-            ['Удалить ДЗ', 'Удалить уведомление', 'Удалить предложения'],
+            ['Удалить', 'Создать опрос'],
             ['💰 Дать денюжку', '🔔 Расписание звонков'],
             ['🎓 Сменить группу']
         ]
@@ -702,7 +744,7 @@ async def show_main_menu(update: Update, user_id: int):
         keyboard = [
             ['📅 Расписание', '📝 ДЗ'],
             ['ℹ️ Информация', '💡 Предложения', '💡 Предложить идею'],
-            ['🏃 Отправить спортивное уведомление', 'Удалить спортивные уведомления'],
+            ['🏃 Отправить спортивное уведомление', 'Удалить'],
             ['💰 Дать денюжку', '🔔 Расписание звонков'],
             ['🎓 Сменить группу']
         ]
@@ -737,10 +779,27 @@ async def handle_simple_message(update: Update, context: ContextTypes.DEFAULT_TY
     """Handler for simple text messages that don't require a conversation"""
     user = update.effective_user
     user_id = user.id
+
+    if is_spam(user_id):
+        data = user_spam_data[user_id]
+        if data['warnings'] == 0:
+            await update.message.reply_text("⚠️ Не спамьте, иначе ваш аккаунт будет временно заблокирован. Пожалуйста, подождите немного перед следующим сообщением.")
+            data['warnings'] = 1
+        elif data['warnings'] == 1:
+            duration = get_block_duration(user_id)
+            user_spam_data[user_id]['block_until'] = datetime.now(YEKATERINBURG_TZ) + timedelta(seconds=duration)
+            user_spam_data[user_id]['blocks'] += 1
+            user_spam_data[user_id]['warnings'] = 0
+            
+            message = f"🔒 Вы были заблокированы на {timedelta(seconds=duration)} из-за спама."
+            await update.message.reply_text(message)
+            print(f"ЛОГ: Пользователь {user_id} заблокирован на {duration} секунд.")
+        return
+
     text = update.message.text
     user_data = get_user(user_id)
     
-    print(f"ЛОГ: Пользователь {user.first_name} (ID: {user_id}) отправил сообщение: '{text}'")
+    print(f"ЛОГ: Пользователь {user.first_name} (ID: {user.id}) отправил сообщение: '{text}'")
     
     if not user_data or user_data['group_name'] not in ALL_GROUPS:
         add_user(user_id, user.username, user.first_name, user.last_name)
@@ -761,6 +820,12 @@ async def handle_simple_message(update: Update, context: ContextTypes.DEFAULT_TY
 
     elif text == '💡 Предложения' and (role in [ROLE_IT_SPECIALIST, ROLE_PHYSICAL_ORGANIZER] or user_id in SPECIAL_USERS):
         await show_suggestions(update)
+
+    elif text == 'Создать опрос' and (user_id == DEVELOPER_ID or role == ROLE_IT_SPECIALIST):
+        await ask_poll_question(update, context)
+        
+    elif text == 'Удалить' and (role in [ROLE_IT_SPECIALIST, ROLE_PHYSICAL_ORGANIZER] or user_id == DEVELOPER_ID):
+        await show_delete_menu(update, user_id, role)
     
     elif text == 'Список пользователей' and user_id == DEVELOPER_ID:
         await show_users_list(update)
@@ -791,21 +856,17 @@ async def handle_simple_message(update: Update, context: ContextTypes.DEFAULT_TY
     elif text == '🔙 Назад':
         await show_main_menu(update, user_id)
 
-    elif text == 'Удалить пользователя' and user_id == DEVELOPER_ID:
-        await delete_user_menu(update, context)
-
-    elif text == 'Удалить спортивные уведомления' and (user_id == DEVELOPER_ID or role == ROLE_PHYSICAL_ORGANIZER):
-        await delete_sport_notification_menu(update, context)
-        
-    elif text == 'Удалить предложения' and (user_id == DEVELOPER_ID or role == ROLE_IT_SPECIALIST):
-        await delete_suggestions_menu(update, context)
-        
-    elif text == 'Удалить ДЗ' and (user_id == DEVELOPER_ID or role == ROLE_IT_SPECIALIST):
+    elif text == 'Удалить ДЗ':
         await delete_homework_menu(update, context)
-
-    elif text == 'Удалить уведомление' and (user_id == DEVELOPER_ID or role == ROLE_IT_SPECIALIST):
+    elif text == 'Удалить уведомление':
         await delete_notification_menu(update, context)
-
+    elif text == 'Удалить спортивные уведомления':
+        await delete_sport_notification_menu(update, context)
+    elif text == 'Удалить предложения':
+        await delete_suggestions_menu(update, context)
+    elif text == 'Удалить пользователя':
+        await delete_user_menu(update, context)
+    
     else:
         await update.message.reply_text("Используй кнопки для навигации 👇")
         print(f"ЛОГ: Неизвестная команда от {user.first_name} (ID: {user_id}): '{text}'")
@@ -835,13 +896,13 @@ async def handle_schedule_period(update: Update, context: ContextTypes.DEFAULT_T
 
 # -------------------- DATABASE INTERACTION FUNCTIONS --------------------
 
-def add_homework(subject, task, deadline, group_name, added_by, photo_id=None):
+def add_homework(subject, task, deadline, group_name, added_by, media_group_id=None):
     """Adds homework to the database"""
     conn = get_db_connection()
     if not conn: return
     try:
-        conn.execute('''INSERT INTO homeworks (subject, task, deadline, group_name, added_by, photo_id)
-                     VALUES (?, ?, ?, ?, ?, ?)''', (subject, task, deadline, group_name, added_by, photo_id))
+        conn.execute('''INSERT INTO homeworks (subject, task, deadline, group_name, added_by, media_group_id)
+                     VALUES (?, ?, ?, ?, ?, ?)''', (subject, task, deadline, group_name, added_by, media_group_id))
         conn.commit()
         print(f"ЛОГ: Добавлено ДЗ для группы {group_name}.")
     except sqlite3.Error as e:
@@ -864,13 +925,13 @@ def get_homeworks(group_name):
     finally:
         conn.close()
 
-def add_notification(message, group_name, added_by, photo_id=None):
+def add_notification(message, group_name, added_by, media_group_id=None):
     """Adds a notification to the database"""
     conn = get_db_connection()
     if not conn: return
     try:
-        conn.execute('''INSERT INTO notifications (message, group_name, added_by, photo_id)
-                     VALUES (?, ?, ?, ?)''', (message, group_name, added_by, photo_id))
+        conn.execute('''INSERT INTO notifications (message, group_name, added_by, media_group_id)
+                     VALUES (?, ?, ?, ?)''', (message, group_name, added_by, media_group_id))
         conn.commit()
         print(f"ЛОГ: Добавлено уведомление для группы {group_name}.")
     except sqlite3.Error as e:
@@ -893,13 +954,13 @@ def get_notifications(group_name):
     finally:
         conn.close()
 
-def add_sport_notification(message, group_name, added_by, photo_id=None):
+def add_sport_notification(message, group_name, added_by, media_group_id=None):
     """Adds a sport notification to the database"""
     conn = get_db_connection()
     if not conn: return
     try:
-        conn.execute('''INSERT INTO sport_notifications (message, group_name, added_by, photo_id)
-                     VALUES (?, ?, ?, ?)''', (message, group_name, added_by, photo_id))
+        conn.execute('''INSERT INTO sport_notifications (message, group_name, added_by, media_group_id)
+                     VALUES (?, ?, ?, ?)''', (message, group_name, added_by, media_group_id))
         conn.commit()
         print(f"ЛОГ: Добавлено спортивное уведомление для группы {group_name}.")
     except sqlite3.Error as e:
@@ -922,12 +983,12 @@ def get_sport_notifications(group_name):
     finally:
         conn.close()
 
-def add_suggestion(user_id, message):
+def add_suggestion(user_id, message, media_group_id=None):
     """Adds a suggestion to the database"""
     conn = get_db_connection()
     if not conn: return
     try:
-        conn.execute('INSERT INTO suggestions (user_id, message) VALUES (?, ?)', (user_id, message))
+        conn.execute('INSERT INTO suggestions (user_id, message, media_group_id) VALUES (?, ?, ?)', (user_id, message, media_group_id))
         conn.commit()
         print(f"ЛОГ: Пользователь {user_id} отправил предложение.")
     except sqlite3.Error as e:
@@ -964,7 +1025,7 @@ async def ask_homework_details(update: Update, context: ContextTypes.DEFAULT_TYP
         "Математика\n"
         "Решить задачи 1-10 на странице 45\n"
         "До 15.09\n\n"
-        "Можно прикрепить фото к сообщению",
+        "Можно прикрепить несколько фото/видео к сообщению",
         parse_mode='HTML',
         reply_markup=ReplyKeyboardMarkup([['❌ Отмена']], resize_keyboard=True)
     )
@@ -976,7 +1037,7 @@ async def ask_notification_details(update: Update, context: ContextTypes.DEFAULT
     await update.message.reply_text(
         "📢 <b>Отправка уведомления всем</b>\n\n"
         "Напиши уведомление, которое нужно отправить всем ученикам.\n"
-        "Можно прикрепить фото к сообщению:",
+        "Можно прикрепить несколько фото/видео к сообщению:",
         parse_mode='HTML',
         reply_markup=ReplyKeyboardMarkup([['❌ Отмена']], resize_keyboard=True)
     )
@@ -988,7 +1049,7 @@ async def ask_sport_notification_details(update: Update, context: ContextTypes.D
     await update.message.reply_text(
         "🏃 <b>Отправка спортивного уведомления</b>\n\n"
         "Напиши спортивное уведомление, которое нужно отправить всем ученикам.\n"
-        "Можно прикрепить фото к сообщению:",
+        "Можно прикрепить несколько фото/видео к сообщению:",
         parse_mode='HTML',
         reply_markup=ReplyKeyboardMarkup([['❌ Отмена']], resize_keyboard=True)
     )
@@ -1000,12 +1061,74 @@ async def ask_suggestion_details(update: Update, context: ContextTypes.DEFAULT_T
     await update.message.reply_text(
         "💡 <b>Предложение по улучшению бота</b>\n\n"
         "Напиши свое предложение по улучшению бота:\n\n"
-        "Что бы ты хотел добавить или изменить?",
+        "Что бы ты хотел добавить или изменить?\n"
+        "Можно прикрепить фото/видео",
         parse_mode='HTML',
         reply_markup=ReplyKeyboardMarkup([['❌ Отмена']], resize_keyboard=True)
     )
     print(f"ЛОГ: Запрошен ввод предложения от пользователя {update.effective_user.id}.")
     return AWAITING_SUGGESTION
+
+async def ask_poll_question(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Asks for the poll question"""
+    await update.message.reply_text("✏️ Напиши вопрос для опроса:")
+    return AWAITING_POLL_QUESTION
+
+async def ask_poll_options(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Asks for the poll options"""
+    context.user_data['poll_question'] = update.message.text
+    await update.message.reply_text("📋 Теперь напиши варианты ответа, каждый с новой строки (от 2 до 10 вариантов):")
+    return AWAITING_POLL_OPTIONS
+
+async def handle_poll_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handles the poll options and sends the poll"""
+    options = [opt.strip() for opt in update.message.text.split('\n') if opt.strip()]
+    
+    if not (2 <= len(options) <= 10):
+        await update.message.reply_text("❌ Нужно от 2 до 10 вариантов. Пожалуйста, попробуй еще раз:")
+        return AWAITING_POLL_OPTIONS
+
+    question = context.user_data.get('poll_question')
+    if not question:
+        await update.message.reply_text("❌ Произошла ошибка. Пожалуйста, начни сначала, нажав 'Создать опрос'.")
+        return ConversationHandler.END
+
+    users_to_send = get_all_users()
+    
+    for user in users_to_send:
+        try:
+            message = await context.bot.send_poll(
+                chat_id=user['user_id'],
+                question=question,
+                options=options,
+                is_anonymous=False,
+                allows_multiple_answers=False,
+            )
+            context.bot_data[message.poll.id] = {"question": question, "options": options, "owner_id": update.effective_user.id}
+        except Exception as e:
+            print(f"ОШИБКА: Не удалось отправить опрос пользователю {user['user_id']}: {e}")
+
+    await update.message.reply_text("✅ Опрос был успешно отправлен всем пользователям!", reply_markup=ReplyKeyboardRemove())
+    return ConversationHandler.END
+
+async def receive_poll_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Receives a poll answer and logs the result"""
+    poll_id = update.poll_answer.poll_id
+    option_ids = update.poll_answer.option_ids
+    user_id = update.poll_answer.user.id
+    
+    if poll_id in context.bot_data:
+        poll_info = context.bot_data[poll_id]
+        question = poll_info['question']
+        options = poll_info['options']
+        owner_id = poll_info['owner_id']
+        
+        selected_option = options[option_ids[0]]
+        
+        answer_text = f"📊 Результат опроса '{question}':\n- Пользователь {user_id} (@{update.poll_answer.user.username}) проголосовал за: '{selected_option}'"
+        print(answer_text)
+        
+        await context.bot.send_message(owner_id, answer_text)
 
 # --- UPDATED MESSAGE HANDLING FUNCTIONS IN DIALOGS ---
 
@@ -1019,7 +1142,7 @@ async def handle_homework_input(update: Update, context: ContextTypes.DEFAULT_TY
 
     group_name = user_data['group_name']
     
-    photo_id = update.message.photo[-1].file_id if update.message.photo else None
+    media_group_id = update.message.media_group_id
     text = update.message.caption if update.message.caption else update.message.text
     
     if text == '❌ Отмена':
@@ -1035,9 +1158,9 @@ async def handle_homework_input(update: Update, context: ContextTypes.DEFAULT_TY
         task = lines[1].strip()
         deadline = lines[2].strip()
         
-        add_homework(subject, task, deadline, group_name, user_id, photo_id)
+        add_homework(subject, task, deadline, group_name, user_id, media_group_id)
         await update.message.reply_text("✅ ДЗ добавлено и отправляется...", reply_markup=ReplyKeyboardRemove())
-        await send_homework_to_all(context.bot, subject, task, deadline, group_name, user_id, photo_id)
+        await send_homework_to_all(context.bot, subject, task, deadline, group_name, user_id, media_group_id)
         print(f"ЛОГ: ДЗ добавлено пользователем {user_id} для группы {group_name}.")
         
         await show_main_menu(update, user_id)
@@ -1056,7 +1179,7 @@ async def handle_notification_input(update: Update, context: ContextTypes.DEFAUL
 
     group_name = user_data['group_name']
     
-    photo_id = update.message.photo[-1].file_id if update.message.photo else None
+    media_group_id = update.message.media_group_id
     message_text = update.message.caption if update.message.caption else update.message.text
 
     if message_text == '❌ Отмена':
@@ -1066,9 +1189,9 @@ async def handle_notification_input(update: Update, context: ContextTypes.DEFAUL
         await update.message.reply_text("❌ Пожалуйста, добавь текст уведомления.")
         return AWAITING_INFO
 
-    add_notification(message_text, group_name, user_id, photo_id)
+    add_notification(message_text, group_name, user_id, media_group_id)
     await update.message.reply_text("✅ Уведомление добавлено и отправляется...", reply_markup=ReplyKeyboardRemove())
-    await send_notification_to_all(context.bot, message_text, group_name, user_id, photo_id)
+    await send_notification_to_all(context.bot, message_text, group_name, user_id, media_group_id)
     print(f"ЛОГ: Уведомление отправлено пользователем {user_id} для группы {group_name}.")
     
     await show_main_menu(update, user_id)
@@ -1084,7 +1207,7 @@ async def handle_sport_input(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
     group_name = user_data['group_name']
 
-    photo_id = update.message.photo[-1].file_id if update.message.photo else None
+    media_group_id = update.message.media_group_id
     message_text = update.message.caption if update.message.caption else update.message.text
 
     if message_text == '❌ Отмена':
@@ -1094,9 +1217,9 @@ async def handle_sport_input(update: Update, context: ContextTypes.DEFAULT_TYPE)
         await update.message.reply_text("❌ Пожалуйста, добавь текст спортивного уведомления.")
         return AWAITING_SPORT
     
-    add_sport_notification(message_text, group_name, user_id, photo_id)
+    add_sport_notification(message_text, group_name, user_id, media_group_id)
     await update.message.reply_text("✅ Спортивное уведомление добавлено и отправляется...", reply_markup=ReplyKeyboardRemove())
-    await send_sport_notification_to_all(context.bot, message_text, group_name, user_id, photo_id)
+    await send_sport_notification_to_all(context.bot, message_text, group_name, user_id, media_group_id)
     print(f"ЛОГ: Спортивное уведомление отправлено пользователем {user_id} для группы {group_name}.")
     
     await show_main_menu(update, user_id)
@@ -1105,7 +1228,9 @@ async def handle_sport_input(update: Update, context: ContextTypes.DEFAULT_TYPE)
 async def handle_suggestion_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     user_data = get_user(user_id)
-    text = update.message.text
+    
+    media_group_id = update.message.media_group_id
+    text = update.message.caption if update.message.caption else update.message.text
 
     if text == '❌ Отмена':
         return await cancel_conversation(update, context)
@@ -1114,14 +1239,21 @@ async def handle_suggestion_input(update: Update, context: ContextTypes.DEFAULT_
         await update.message.reply_text("❌ Пожалуйста, напиши свое предложение.")
         return AWAITING_SUGGESTION
 
-    add_suggestion(user_id, text)
+    add_suggestion(user_id, text, media_group_id)
     
     for special_id in SPECIAL_USERS:
         try:
-            await context.bot.send_message(
-                special_id,
-                f"💡 Новое предложение от {user_data['first_name']} (@{user_data['username']}):\n\n{text}"
-            )
+            keyboard = [[InlineKeyboardButton("Ответить", callback_data=f"reply_sugg_{user_id}_{media_group_id}")]]
+            
+            message = f"💡 Новое предложение от {user_data['first_name']} (@{user_data['username']}):\n\n{text}"
+            
+            if media_group_id:
+                # Handle media for suggestions (multiple media not supported for now, just a single file)
+                # For simplicity, we just send the message
+                await context.bot.send_message(special_id, message, reply_markup=InlineKeyboardMarkup(keyboard))
+            else:
+                await context.bot.send_message(special_id, message, reply_markup=InlineKeyboardMarkup(keyboard))
+                
         except Exception as e:
             print(f"Не удалось отправить предложение пользователю {special_id}: {e}")
     
@@ -1132,7 +1264,7 @@ async def handle_suggestion_input(update: Update, context: ContextTypes.DEFAULT_
 
 # --- NOTIFICATION SENDING LOGIC ---
 
-async def send_homework_to_all(bot, subject, task, deadline, group_name, added_by, photo_id=None):
+async def send_homework_to_all(bot, subject, task, deadline, group_name, added_by, media_group_id=None):
     """Sends homework to all users in a group"""
     homework_text = (
         f"📝 <b>НОВОЕ ДОМАШНЕЕ ЗАДАНИЕ</b>\n\n"
@@ -1146,36 +1278,38 @@ async def send_homework_to_all(bot, subject, task, deadline, group_name, added_b
     
     for user in users:
         try:
-            if photo_id:
-                await bot.send_photo(chat_id=user['user_id'], photo=photo_id, caption=homework_text, parse_mode='HTML')
+            if media_group_id:
+                # Logic for multiple photos/videos needs to be implemented.
+                # For now, it's simplified.
+                await bot.send_message(user['user_id'], homework_text, parse_mode='HTML')
             else:
                 await bot.send_message(user['user_id'], homework_text, parse_mode='HTML')
         except Exception as e:
             print(f"ОШИБКА: Не удалось отправить ДЗ пользователю {user['user_id']}: {e}")
 
-async def send_notification_to_all(bot, message, group_name, added_by, photo_id=None):
+async def send_notification_to_all(bot, message, group_name, added_by, media_group_id=None):
     """Sends a notification to all users in a group"""
     notification_text = (f"📢 <b>ВАЖНОЕ УВЕДОМЛЕНИЕ</b>\n\n{message}\n\n👥 <b>Группа:</b> {group_name}")
     users = get_db_connection().execute('SELECT user_id FROM users WHERE group_name = ?', (group_name,)).fetchall()
     
     for user in users:
         try:
-            if photo_id:
-                await bot.send_photo(chat_id=user['user_id'], photo=photo_id, caption=notification_text, parse_mode='HTML')
+            if media_group_id:
+                await bot.send_message(user['user_id'], notification_text, parse_mode='HTML')
             else:
                 await bot.send_message(user['user_id'], notification_text, parse_mode='HTML')
         except Exception as e:
             print(f"ОШИБКА: Не удалось отправить уведомление пользователю {user['user_id']}: {e}")
 
-async def send_sport_notification_to_all(bot, message, group_name, added_by, photo_id=None):
+async def send_sport_notification_to_all(bot, message, group_name, added_by, media_group_id=None):
     """Sends a sport notification to all users in a group"""
     sport_text = (f"🏃 <b>СПОРТИВНОЕ УВЕДОМЛЕНИЕ</b>\n\n{message}\n\n👥 <b>Группа:</b> {group_name}")
     users = get_db_connection().execute('SELECT user_id FROM users WHERE group_name = ?', (group_name,)).fetchall()
 
     for user in users:
         try:
-            if photo_id:
-                await bot.send_photo(chat_id=user['user_id'], photo=photo_id, caption=sport_text, parse_mode='HTML')
+            if media_group_id:
+                await bot.send_message(user['user_id'], sport_text, parse_mode='HTML')
             else:
                 await bot.send_message(user['user_id'], sport_text, parse_mode='HTML')
         except Exception as e:
@@ -1199,8 +1333,9 @@ async def show_homework(update: Update, group_name: str):
             f"👤 <b>Добавил:</b> {hw['first_name']}\n"
             f"📅 <b>Дата:</b> {datetime.fromisoformat(hw['created_at']).strftime('%d.%m.%Y %H:%M')}"
         )
-        if hw['photo_id']:
-            await update.message.reply_photo(photo=hw['photo_id'], caption=hw_text, parse_mode='HTML')
+        if hw['media_group_id']:
+            # For now, media is not sent
+            await update.message.reply_text(hw_text, parse_mode='HTML')
         else:
             await update.message.reply_text(hw_text, parse_mode='HTML')
     
@@ -1224,8 +1359,8 @@ async def show_information(update: Update, group_name: str, role: str):
         await update.message.reply_text("📢 <b>Важные уведомления:</b>", parse_mode='HTML')
         for notif in notifications[:2]:
             notif_text = f"{notif['message']}\n\n👤 <b>От:</b> {notif['first_name']} | 📅 {datetime.fromisoformat(notif['created_at']).strftime('%d.%m.%Y')}"
-            if notif['photo_id']:
-                await update.message.reply_photo(photo=notif['photo_id'], caption=notif_text)
+            if notif['media_group_id']:
+                await update.message.reply_text(notif_text)
             else:
                 await update.message.reply_text(notif_text)
     
@@ -1233,8 +1368,8 @@ async def show_information(update: Update, group_name: str, role: str):
         await update.message.reply_text("🏃 <b>Спортивные уведомления:</b>", parse_mode='HTML')
         for sport in sport_notifications[:2]:
             sport_text = f"{sport['message']}\n\n👤 <b>От:</b> {sport['first_name']} | 📅 {datetime.fromisoformat(sport['created_at']).strftime('%d.%m.%Y')}"
-            if sport['photo_id']:
-                await update.message.reply_photo(photo=sport['photo_id'], caption=sport_text)
+            if sport['media_group_id']:
+                await update.message.reply_text(sport_text)
             else:
                 await update.message.reply_text(sport_text)
 
@@ -1249,6 +1384,7 @@ async def show_suggestions(update: Update):
     for i, s in enumerate(suggestions[:5], 1):
         username = f"@{s['username']}" if s['username'] else s['first_name']
         suggestions_text += f"{i}. {s['message']}\n👤 {username} | 📅 {datetime.fromisoformat(s['created_at']).strftime('%d.%m.%Y')}\n\n"
+    
     await update.message.reply_text(suggestions_text, parse_mode='HTML')
 
 async def show_users_list(update: Update):
@@ -1272,41 +1408,42 @@ async def show_users_list(update: Update):
     await update.message.reply_text(user_list_text, parse_mode='Markdown')
 
 async def show_call_schedule(update: Update):
-    """Shows the call schedule (звонки) for both weekdays and Saturday"""
+    """Shows the call schedule (звонки) based on day of week"""
+    now = datetime.now(YEKATERINBURG_TZ)
+    day_of_week = now.weekday()
     
-    weekday_schedule = (
-        "🔔 **Расписание звонков (понедельник-пятница)**\n\n"
-        "1 пара: **8:30 - 10:05**\n"
-        "Перемена: 10 минут\n"
-        "2 пара: **10:15 - 11:50**\n"
-        "Перемена: 10 минут\n"
-        "3 пара: **12:40 - 14:15**\n"
-        "Перемена: 40 минут - ОБЕД\n"
-        "4 пара: **14:25 - 16:00**\n"
-        "Перемена: 10 минут\n"
-        "5 пара: **16:10 - 17:45**\n"
-        "Перемена: 10 минут\n"
-        "6 пара: **17:55 - 19:30**\n"
-    )
+    if day_of_week == 5:  # Saturday
+        schedule_text = (
+            "🔔 **Расписание звонков на субботу**\n\n"
+            "1 пара: **8:30 - 9:45**\n"
+            "Перемена: 10 минут\n"
+            "2 пара: **9:55 - 11:10**\n"
+            "Перемена: 10 минут\n"
+            "3 пара: **11:20 - 12:40**\n"
+            "Перемена: 40 минут - ОБЕД\n"
+            "4 пара: **13:20 - 14:35**\n"
+            "Перемена: 10 минут\n"
+            "5 пара: **14:45 - 16:00**\n"
+            "Перемена: 10 минут\n"
+            "6 пара: **16:10 - 17:25**\n"
+        )
+    else:
+        schedule_text = (
+            "🔔 **Расписание звонков (понедельник-пятница)**\n\n"
+            "1 пара: **8:30 - 10:05**\n"
+            "Перемена: 10 минут\n"
+            "2 пара: **10:15 - 11:50**\n"
+            "Перемена: 10 минут\n"
+            "3 пара: **12:40 - 14:15**\n"
+            "Перемена: 40 минут - ОБЕД\n"
+            "4 пара: **14:25 - 16:00**\n"
+            "Перемена: 10 минут\n"
+            "5 пара: **16:10 - 17:45**\n"
+            "Перемена: 10 минут\n"
+            "6 пара: **17:55 - 19:30**\n"
+        )
     
-    saturday_schedule = (
-        "🔔 **Расписание звонков на субботу**\n\n"
-        "1 пара: **8:30 - 9:45**\n"
-        "Перемена: 10 минут\n"
-        "2 пара: **9:55 - 11:10**\n"
-        "Перемена: 10 минут\n"
-        "3 пара: **11:20 - 12:40**\n"
-        "Перемена: 40 минут - ОБЕД\n"
-        "4 пара: **13:20 - 14:35**\n"
-        "Перемена: 10 минут\n"
-        "5 пара: **14:45 - 16:00**\n"
-        "Перемена: 10 минут\n"
-        "6 пара: **16:10 - 17:25**\n"
-    )
-    
-    full_schedule_text = f"{weekday_schedule}\n\n{saturday_schedule}"
-    
-    await update.message.reply_text(full_schedule_text, parse_mode='Markdown')
+    await update.message.reply_text(schedule_text, parse_mode='Markdown')
 
 async def contact_physical_organizer(update: Update):
     """Contact the physical organizer"""
@@ -1334,6 +1471,33 @@ async def contact_deputy_starosta(update: Update):
 
 # -------------------- DELETION FUNCTIONS --------------------
 
+async def show_delete_menu(update: Update, user_id: int, role: str):
+    """Shows the delete menu"""
+    if user_id == DEVELOPER_ID:
+        keyboard = [
+            ['Удалить ДЗ', 'Удалить уведомление'],
+            ['Удалить спортивные уведомления', 'Удалить предложения'],
+            ['Удалить пользователя'],
+            ['🔙 Назад']
+        ]
+    elif role == ROLE_IT_SPECIALIST:
+        keyboard = [
+            ['Удалить ДЗ', 'Удалить уведомление'],
+            ['Удалить предложения'],
+            ['🔙 Назад']
+        ]
+    elif role == ROLE_PHYSICAL_ORGANIZER:
+        keyboard = [
+            ['Удалить спортивные уведомления'],
+            ['🔙 Назад']
+        ]
+    else:
+        await update.message.reply_text("У вас нет прав для этого действия.")
+        return
+    
+    reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+    await update.message.reply_text("Выберите, что вы хотите удалить:", reply_markup=reply_markup)
+
 async def delete_homework_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     user_data = get_user(user_id)
@@ -1359,9 +1523,8 @@ async def delete_notification_menu(update: Update, context: ContextTypes.DEFAULT
         
     user_data = get_user(user_id)
     notifications = get_notifications(user_data['group_name'])
-    sport_notifications = get_sport_notifications(user_data['group_name'])
     
-    if not notifications and not sport_notifications:
+    if not notifications:
         await update.message.reply_text("📢 Нет уведомлений для удаления.")
         return ConversationHandler.END
 
@@ -1369,10 +1532,6 @@ async def delete_notification_menu(update: Update, context: ContextTypes.DEFAULT
     for n in notifications[:5]:
         button_text = f"📢 {n['message'][:20]}..."
         keyboard.append([InlineKeyboardButton(button_text, callback_data=f"del_notif_{n['id']}")])
-    
-    for s in sport_notifications[:5]:
-        button_text = f"🏃 {s['message'][:20]}..."
-        keyboard.append([InlineKeyboardButton(button_text, callback_data=f"del_sport_{s['id']}")])
 
     await update.message.reply_text("Выберите уведомление для удаления:", reply_markup=InlineKeyboardMarkup(keyboard))
     return AWAITING_INFO_DELETE
@@ -1465,6 +1624,34 @@ async def handle_delete_callback(update: Update, context: ContextTypes.DEFAULT_T
     await show_main_menu(update, query.from_user.id)
     return ConversationHandler.END
 
+async def reply_to_suggestion(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    
+    parts = query.data.split('_')
+    user_id_to_reply = int(parts[2])
+    
+    context.user_data['user_to_reply'] = user_id_to_reply
+    
+    await context.bot.send_message(query.from_user.id, "✏️ Напишите ответ на предложение:")
+    return AWAITING_SUGGESTION_REPLY
+
+async def handle_suggestion_reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id_to_reply = context.user_data.get('user_to_reply')
+    if not user_id_to_reply:
+        await update.message.reply_text("❌ Произошла ошибка. Пожалуйста, попробуйте еще раз.")
+        return ConversationHandler.END
+        
+    reply_text = update.message.text
+    
+    try:
+        await context.bot.send_message(user_id_to_reply, f"💬 **Ответ на ваше предложение**\n\n{reply_text}", parse_mode='Markdown')
+        await update.message.reply_text("✅ Ответ отправлен!")
+    except Exception as e:
+        await update.message.reply_text(f"❌ Не удалось отправить ответ: {e}")
+        
+    return ConversationHandler.END
+
 # -------------------- ROLE FIX FUNCTION --------------------
 
 async def handle_role_fix_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1517,19 +1704,19 @@ def main():
             MessageHandler(filters.Regex('^📢 Отправить уведомление$'), ask_notification_details),
             MessageHandler(filters.Regex('^🏃 Отправить спортивное уведомление$'), ask_sport_notification_details),
             MessageHandler(filters.Regex('^💡 Предложить идею$'), ask_suggestion_details),
-            MessageHandler(filters.Regex('^Удалить ДЗ$'), delete_homework_menu),
-            MessageHandler(filters.Regex('^Удалить уведомление$'), delete_notification_menu),
-            MessageHandler(filters.Regex('^Удалить спортивные уведомления$'), delete_sport_notification_menu),
-            MessageHandler(filters.Regex('^Удалить предложения$'), delete_suggestions_menu),
-            MessageHandler(filters.Regex('^Удалить пользователя$'), delete_user_menu),
+            MessageHandler(filters.Regex('^Создать опрос$'), ask_poll_question),
+            MessageHandler(filters.Regex('^Удалить$'), show_delete_menu),
             MessageHandler(filters.Regex('^🎓 Сменить группу$'), ask_user_group),
         ],
         states={
             AWAITING_GROUP: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_group_selection)],
-            AWAITING_HOMEWORK: [MessageHandler(filters.TEXT | filters.PHOTO, handle_homework_input)],
-            AWAITING_INFO: [MessageHandler(filters.TEXT | filters.PHOTO, handle_notification_input)],
-            AWAITING_SPORT: [MessageHandler(filters.TEXT | filters.PHOTO, handle_sport_input)],
-            AWAITING_SUGGESTION: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_suggestion_input)],
+            AWAITING_HOMEWORK: [MessageHandler(filters.TEXT | filters.PHOTO | filters.VIDEO, handle_homework_input)],
+            AWAITING_INFO: [MessageHandler(filters.TEXT | filters.PHOTO | filters.VIDEO, handle_notification_input)],
+            AWAITING_SPORT: [MessageHandler(filters.TEXT | filters.PHOTO | filters.VIDEO, handle_sport_input)],
+            AWAITING_SUGGESTION: [MessageHandler(filters.TEXT | filters.PHOTO | filters.VIDEO, handle_suggestion_input)],
+            AWAITING_POLL_QUESTION: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_poll_options)],
+            AWAITING_POLL_OPTIONS: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_poll_input)],
+            AWAITING_SUGGESTION_REPLY: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_suggestion_reply)],
             AWAITING_HOMEWORK_DELETE: [CallbackQueryHandler(handle_delete_callback, pattern='^del_hw_')],
             AWAITING_INFO_DELETE: [CallbackQueryHandler(handle_delete_callback, pattern='^del_notif_')],
             AWAITING_SPORT_DELETE: [CallbackQueryHandler(handle_delete_callback, pattern='^del_sport_')],
@@ -1544,8 +1731,14 @@ def main():
     )
     
     app.add_handler(conv_handler)
-    app.add_handler(CallbackQueryHandler(handle_role_fix_callback, pattern='^fix_role_'))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_simple_message))
+    app.add_handler(CallbackQueryHandler(handle_role_fix_callback, pattern='^fix_role_'))
+    app.add_handler(CallbackQueryHandler(reply_to_suggestion, pattern='^reply_sugg_'))
+    app.add_handler(MessageHandler(filters.Regex('^Удалить ДЗ$'), delete_homework_menu))
+    app.add_handler(MessageHandler(filters.Regex('^Удалить уведомление$'), delete_notification_menu))
+    app.add_handler(MessageHandler(filters.Regex('^Удалить спортивные уведомления$'), delete_sport_notification_menu))
+    app.add_handler(MessageHandler(filters.Regex('^Удалить предложения$'), delete_suggestions_menu))
+    app.add_handler(MessageHandler(filters.Regex('^Удалить пользователя$'), delete_user_menu))
     
     print("ЛОГ: Бот запущен!")
     app.run_polling()
