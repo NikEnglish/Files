@@ -4,9 +4,8 @@ import json
 import asyncio
 import requests
 import os
-import threading
 from datetime import datetime, timedelta, timezone, time
-from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove, InlineKeyboardMarkup, InlineKeyboardButton, Bot
+from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, ConversationHandler, CallbackQueryHandler
 
 # -------------------- CONSTANTS AND SETTINGS --------------------
@@ -15,19 +14,18 @@ YEKATERINBURG_TZ = timezone(timedelta(hours=5))
 DEFAULT_GROUP = "ИД-127"
 
 # States for ConversationHandler
-AWAITING_HOMEWORK, AWAITING_INFO, AWAITING_SPORT, AWAITING_SUGGESTION, AWAITING_HOMEWORK_DELETE, AWAITING_INFO_DELETE, AWAITING_SPORT_DELETE, AWAITING_USER_DELETE, AWAITING_SUGGESTION_DELETE, AWAITING_GROUP, AWAITING_POLL_QUESTION, AWAITING_POLL_OPTIONS, AWAITING_SUGGESTION_REPLY, AWAITING_PHOTO_OR_VIDEO_HOMEWORK = range(14)
+AWAITING_HOMEWORK, AWAITING_INFO, AWAITING_SPORT, AWAITING_SUGGESTION, AWAITING_HOMEWORK_DELETE, AWAITING_INFO_DELETE, AWAITING_SPORT_DELETE, AWAITING_GROUP, AWAITING_USER_DELETE, AWAITING_SUGGESTION_DELETE = range(10)
 
 # User Roles
 ROLE_STUDENT = 'student'
 ROLE_PHYSICAL_ORGANIZER = 'physical_organizer'
 ROLE_IT_SPECIALIST = 'it_specialist'
-ROLE_DEVELOPER = 'developer'
 
 # Special Users (ID and username)
 DEVELOPER_ID = 1775957387
 SPECIAL_USERS = {
     5013216284: {'role': ROLE_IT_SPECIALIST, 'username': '@kimertuzz3', 'name': 'Староста'},
-    DEVELOPER_ID: {'role': ROLE_DEVELOPER, 'username': '@imya_polbzovatela', 'name': 'Зам Старосты'},
+    DEVELOPER_ID: {'role': ROLE_IT_SPECIALIST, 'username': '@imya_polbzovatela', 'name': 'Зам Старосты'},
     5078637058: {'role': ROLE_PHYSICAL_ORGANIZER, 'username': '@NateDiazFight', 'name': 'Физ. орг.'}
 }
 
@@ -49,275 +47,172 @@ last_schedule_check = None
 # User notifications cache to prevent duplicate messages
 user_notification_cache = {}
 
-# Anti-spam system
-user_message_timestamps = {}
-user_cooldowns = {}
-user_cooldown_multipliers = {}
-SPAM_THRESHOLD = 10
-SPAM_INTERVAL = 5
-COOLDOWN_BASE_TIME = 600 # 10 minutes
-
-# Global dictionary to store poll data
-polls_data = {}
-
-# Global dictionary for user states during multi-photo upload
-multi_photo_state = {}
-
 # -------------------- DATABASE FUNCTIONS --------------------
 
 def init_db():
     """Initializes the database"""
-    conn = None
-    try:
-        conn = sqlite3.connect('bot_data.db')
-        cur = conn.cursor()
-        
-        # Users table
-        cur.execute('''CREATE TABLE IF NOT EXISTS users (
-            user_id INTEGER PRIMARY KEY,
-            username TEXT,
-            first_name TEXT,
-            last_name TEXT,
-            group_name TEXT,
-            role TEXT DEFAULT 'student',
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )''')
-        
-        # Homeworks table
-        cur.execute('''CREATE TABLE IF NOT EXISTS homeworks (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            subject TEXT,
-            task TEXT,
-            deadline TEXT,
-            group_name TEXT,
-            added_by INTEGER,
-            file_ids TEXT,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (added_by) REFERENCES users (user_id)
-        )''')
-        
-        # Notifications table (from IT specialists)
-        cur.execute('''CREATE TABLE IF NOT EXISTS notifications (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            message TEXT,
-            group_name TEXT,
-            added_by INTEGER,
-            file_ids TEXT,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (added_by) REFERENCES users (user_id)
-        )''')
-        
-        # Sport notifications table (from physical organizer)
-        cur.execute('''CREATE TABLE IF NOT EXISTS sport_notifications (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            message TEXT,
-            group_name TEXT,
-            added_by INTEGER,
-            file_ids TEXT,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (added_by) REFERENCES users (user_id)
-        )''')
-        
-        # Suggestions table
-        cur.execute('''CREATE TABLE IF NOT EXISTS suggestions (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER,
-            message TEXT,
-            file_ids TEXT,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (user_id) REFERENCES users (user_id)
-        )''')
-        
-        # Polls table
-        cur.execute('''CREATE TABLE IF NOT EXISTS polls (
-            id INTEGER PRIMARY KEY,
-            question TEXT,
-            options TEXT,
-            creator_id INTEGER,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )''')
-        
-        # Poll votes table
-        cur.execute('''CREATE TABLE IF NOT EXISTS poll_votes (
-            poll_id INTEGER,
-            user_id INTEGER,
-            vote_option TEXT,
-            voted_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            PRIMARY KEY (poll_id, user_id),
-            FOREIGN KEY (poll_id) REFERENCES polls (id),
-            FOREIGN KEY (user_id) REFERENCES users (user_id)
-        )''')
-
-        conn.commit()
-        print("ЛОГ: База данных инициализирована.")
-    except sqlite3.Error as e:
-        print(f"ОШИБКА: Ошибка базы данных при инициализации: {e}")
-    finally:
-        if conn:
-            conn.close()
+    conn = sqlite3.connect('bot_data.db')
+    cur = conn.cursor()
+    
+    # Users table
+    cur.execute('''CREATE TABLE IF NOT EXISTS users (
+        user_id INTEGER PRIMARY KEY,
+        username TEXT,
+        first_name TEXT,
+        last_name TEXT,
+        group_name TEXT,
+        role TEXT DEFAULT 'student',
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )''')
+    
+    # Homeworks table
+    cur.execute('''CREATE TABLE IF NOT EXISTS homeworks (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        subject TEXT,
+        task TEXT,
+        deadline TEXT,
+        group_name TEXT,
+        added_by INTEGER,
+        photo_id TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (added_by) REFERENCES users (user_id)
+    )''')
+    
+    # Notifications table (from IT specialists)
+    cur.execute('''CREATE TABLE IF NOT EXISTS notifications (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        message TEXT,
+        group_name TEXT,
+        added_by INTEGER,
+        photo_id TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (added_by) REFERENCES users (user_id)
+    )''')
+    
+    # Sport notifications table (from physical organizer)
+    cur.execute('''CREATE TABLE IF NOT EXISTS sport_notifications (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        message TEXT,
+        group_name TEXT,
+        added_by INTEGER,
+        photo_id TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (added_by) REFERENCES users (user_id)
+    )''')
+    
+    # Suggestions table
+    cur.execute('''CREATE TABLE IF NOT EXISTS suggestions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER,
+        message TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (user_id) REFERENCES users (user_id)
+    )''')
+    
+    conn.commit()
+    conn.close()
+    print("ЛОГ: База данных инициализирована.")
 
 def get_db_connection():
     """Creates a connection to the database"""
-    try:
-        conn = sqlite3.connect('bot_data.db')
-        conn.row_factory = sqlite3.Row
-        return conn
-    except sqlite3.Error as e:
-        print(f"ОШИБКА: Ошибка базы данных при подключении: {e}")
-        return None
+    conn = sqlite3.connect('bot_data.db')
+    conn.row_factory = sqlite3.Row
+    return conn
 
 def get_user(user_id):
     """Gets user information"""
     conn = get_db_connection()
-    if not conn: return None
-    try:
-        user = conn.execute('SELECT * FROM users WHERE user_id = ?', (user_id,)).fetchone()
-        return user
-    except sqlite3.Error as e:
-        print(f"ОШИБКА: Ошибка базы данных при получении пользователя: {e}")
-        return None
-    finally:
-        conn.close()
+    user = conn.execute('SELECT * FROM users WHERE user_id = ?', (user_id,)).fetchone()
+    conn.close()
+    return user
 
 def get_all_users():
     """Gets a list of all users"""
     conn = get_db_connection()
-    if not conn: return []
-    try:
-        users = conn.execute('SELECT user_id, first_name, username, group_name FROM users').fetchall()
-        return users
-    except sqlite3.Error as e:
-        print(f"ОШИБКА: Ошибка базы данных при получении списка пользователей: {e}")
-        return []
-    finally:
-        conn.close()
+    users = conn.execute('SELECT user_id, first_name, username, group_name FROM users').fetchall()
+    conn.close()
+    return users
 
 def add_user(user_id, username, first_name, last_name):
     """Adds a new user to the database or updates existing user"""
     conn = get_db_connection()
-    if not conn: return
-    try:
-        existing_user = conn.execute('SELECT * FROM users WHERE user_id = ?', (user_id,)).fetchone()
-        
-        role = ROLE_STUDENT
-        if user_id in SPECIAL_USERS:
-            role = SPECIAL_USERS[user_id]['role']
-        
-        if not existing_user:
-            conn.execute('''INSERT INTO users (user_id, username, first_name, last_name, group_name, role)
-                         VALUES (?, ?, ?, ?, ?, ?)''',
-                         (user_id, username, first_name, last_name, DEFAULT_GROUP, role))
-            print(f"ЛОГ: Добавлен новый пользователь: {first_name} (ID: {user_id}) с группой {DEFAULT_GROUP} и ролью {role}")
-        else:
-            conn.execute('''UPDATE users 
-                         SET username = ?, first_name = ?, last_name = ?, role = ?
-                         WHERE user_id = ?''',
-                         (username, first_name, last_name, role, user_id))
-            print(f"ЛОГ: Обновлен пользователь: {first_name} (ID: {user_id}), роль: {role}")
-        
-        conn.commit()
-    except sqlite3.Error as e:
-        print(f"ОШИБКА: Ошибка базы данных при добавлении пользователя: {e}")
-    finally:
-        conn.close()
+    
+    existing_user = conn.execute('SELECT * FROM users WHERE user_id = ?', (user_id,)).fetchone()
+    
+    role = ROLE_STUDENT
+    if user_id in SPECIAL_USERS:
+        role = SPECIAL_USERS[user_id]['role']
+    
+    if not existing_user:
+        conn.execute('''INSERT INTO users (user_id, username, first_name, last_name, group_name, role)
+                     VALUES (?, ?, ?, ?, ?, ?)''',
+                     (user_id, username, first_name, last_name, DEFAULT_GROUP, role))
+        print(f"ЛОГ: Добавлен новый пользователь: {first_name} (ID: {user_id}) с группой {DEFAULT_GROUP} и ролью {role}")
+    else:
+        conn.execute('''UPDATE users 
+                     SET username = ?, first_name = ?, last_name = ?, role = ?
+                     WHERE user_id = ?''',
+                     (username, first_name, last_name, role, user_id))
+        print(f"ЛОГ: Обновлен пользователь: {first_name} (ID: {user_id}), роль: {role}")
+    
+    conn.commit()
+    conn.close()
 
 def update_user_group(user_id, group_name):
     """Updates the user's group"""
     conn = get_db_connection()
-    if not conn: return
-    try:
-        conn.execute('UPDATE users SET group_name = ? WHERE user_id = ?', (group_name, user_id))
-        conn.commit()
-        print(f"ЛОГ: Пользователь {user_id} сменил группу на {group_name}")
-    except sqlite3.Error as e:
-        print(f"ОШИБКА: Ошибка базы данных при обновлении группы: {e}")
-    finally:
-        conn.close()
+    conn.execute('UPDATE users SET group_name = ? WHERE user_id = ?', (group_name, user_id))
+    conn.commit()
+    conn.close()
+    print(f"ЛОГ: Пользователь {user_id} сменил группу на {group_name}")
     
 def get_total_user_count():
     """Gets the total number of users in the database"""
     conn = get_db_connection()
-    if not conn: return 0
-    try:
-        count = conn.execute('SELECT COUNT(*) FROM users').fetchone()[0]
-        return count
-    except sqlite3.Error as e:
-        print(f"ОШИБКА: Ошибка базы данных при подсчете пользователей: {e}")
-        return 0
-    finally:
-        conn.close()
-
+    count = conn.execute('SELECT COUNT(*) FROM users').fetchone()[0]
+    conn.close()
+    return count
+    
 def delete_homework(hw_id):
     conn = get_db_connection()
-    if not conn: return
-    try:
-        conn.execute('DELETE FROM homeworks WHERE id = ?', (hw_id,))
-        conn.commit()
-    except sqlite3.Error as e:
-        print(f"ОШИБКА: Ошибка базы данных при удалении ДЗ: {e}")
-    finally:
-        conn.close()
+    conn.execute('DELETE FROM homeworks WHERE id = ?', (hw_id,))
+    conn.commit()
+    conn.close()
 
 def delete_notification(notif_id):
     conn = get_db_connection()
-    if not conn: return
-    try:
-        conn.execute('DELETE FROM notifications WHERE id = ?', (notif_id,))
-        conn.commit()
-    except sqlite3.Error as e:
-        print(f"ОШИБКА: Ошибка базы данных при удалении уведомления: {e}")
-    finally:
-        conn.close()
+    conn.execute('DELETE FROM notifications WHERE id = ?', (notif_id,))
+    conn.commit()
+    conn.close()
 
 def delete_sport_notification(notif_id):
     conn = get_db_connection()
-    if not conn: return
-    try:
-        conn.execute('DELETE FROM sport_notifications WHERE id = ?', (notif_id,))
-        conn.commit()
-    except sqlite3.Error as e:
-        print(f"ОШИБКА: Ошибка базы данных при удалении спортивного уведомления: {e}")
-    finally:
-        conn.close()
+    conn.execute('DELETE FROM sport_notifications WHERE id = ?', (notif_id,))
+    conn.commit()
+    conn.close()
 
 def delete_user(user_id):
     conn = get_db_connection()
-    if not conn: return
-    try:
-        conn.execute('DELETE FROM users WHERE user_id = ?', (user_id,))
-        conn.commit()
-        print(f"ЛОГ: Пользователь {user_id} удален из базы данных.")
-    except sqlite3.Error as e:
-        print(f"ОШИБКА: Ошибка базы данных при удалении пользователя: {e}")
-    finally:
-        conn.close()
+    conn.execute('DELETE FROM users WHERE user_id = ?', (user_id,))
+    conn.commit()
+    conn.close()
+    print(f"ЛОГ: Пользователь {user_id} удален из базы данных.")
 
 def delete_suggestion(suggestion_id):
     conn = get_db_connection()
-    if not conn: return
-    try:
-        conn.execute('DELETE FROM suggestions WHERE id = ?', (suggestion_id,))
-        conn.commit()
-        print(f"ЛОГ: Предложение {suggestion_id} удалено из базы данных.")
-    except sqlite3.Error as e:
-        print(f"ОШИБКА: Ошибка базы данных при удалении предложения: {e}")
-    finally:
-        conn.close()
+    conn.execute('DELETE FROM suggestions WHERE id = ?', (suggestion_id,))
+    conn.commit()
+    conn.close()
+    print(f"ЛОГ: Предложение {suggestion_id} удалено из базы данных.")
 
 def get_all_sport_notifications():
     """Gets all sport notifications"""
     conn = get_db_connection()
-    if not conn: return []
-    try:
-        notifications = conn.execute('''SELECT s.*, u.first_name 
-                                     FROM sport_notifications s JOIN users u ON s.added_by = u.user_id 
-                                     ORDER BY s.created_at DESC''').fetchall()
-        return notifications
-    except sqlite3.Error as e:
-        print(f"ОШИБКА: Ошибка базы данных при получении спортивных уведомлений: {e}")
-        return []
-    finally:
-        conn.close()
+    notifications = conn.execute('''SELECT s.*, u.first_name 
+                                 FROM sport_notifications s JOIN users u ON s.added_by = u.user_id 
+                                 ORDER BY s.created_at DESC''').fetchall()
+    conn.close()
+    return notifications
 
 # -------------------- SCHEDULE FUNCTIONS --------------------
 
@@ -339,14 +234,8 @@ def fetch_schedule_data():
         schedule_json_str = schedule_raw.replace(";", "")
         return json.loads(schedule_json_str)
     
-    except requests.exceptions.RequestException as e:
-        print(f"ОШИБКА: Ошибка сети при загрузке расписания: {e}")
-        return None
-    except (json.JSONDecodeError, IndexError) as e:
-        print(f"ОШИБКА: Ошибка обработки данных расписания: {e}")
-        return None
     except Exception as e:
-        print(f"ОШИБКА: Неизвестная ошибка при загрузке расписания: {e}")
+        print(f"ОШИБКА: Не удалось загрузить расписание: {e}")
         return None
 
 def filter_today_lessons(lessons):
@@ -576,7 +465,7 @@ async def check_next_lesson(context: ContextTypes.DEFAULT_TYPE):
     """Checks and sends notification about next lesson"""
     global schedule_cache, user_notification_cache
     
-    # print("ЛОГ: Проверка следующей пары...")  # Убрано по просьбе пользователя
+    print("ЛОГ: Проверка следующей пары...")
     
     now = datetime.now(YEKATERINBURG_TZ)
     today_date = now.date()
@@ -600,8 +489,10 @@ async def check_next_lesson(context: ContextTypes.DEFAULT_TYPE):
             try:
                 lesson_number = lesson.get('lessonNumber', 0)
                 
+                # Use a combined key for notification cache to prevent duplicates
                 notification_key = f"{user_id}_{today_date}_{lesson_number}"
                 
+                # Check if we have already sent this notification today
                 if user_notification_cache.get(notification_key) is True:
                     continue
 
@@ -625,48 +516,15 @@ async def check_next_lesson(context: ContextTypes.DEFAULT_TYPE):
                         user_notification_cache[notification_key] = True
                     except Exception as e:
                         print(f"ОШИБКА: Не удалось отправить уведомление о следующей паре пользователю {user_id}: {e}")
-                        
+
             except Exception as e:
                 print(f"ОШИБКА: Не удалось обработать пару: {e}")
                 continue
-                
+
+    # Clean up old notifications from the cache once a day
     if now.hour == 0 and now.minute == 0:
         user_notification_cache.clear()
 
-# -------------------- ANTI-SPAM FUNCTIONALITY --------------------
-
-async def anti_spam(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    now = datetime.now()
-
-    if user_id in user_cooldowns and now < user_cooldowns[user_id]:
-        cooldown_remaining = int((user_cooldowns[user_id] - now).total_seconds())
-        await update.message.reply_text(f"⏳ Вы заблокированы на {cooldown_remaining} секунд за спам.")
-        return False
-
-    if user_id not in user_message_timestamps:
-        user_message_timestamps[user_id] = []
-    
-    user_message_timestamps[user_id].append(now)
-    
-    # Remove old timestamps
-    user_message_timestamps[user_id] = [ts for ts in user_message_timestamps[user_id] if now - ts < timedelta(seconds=SPAM_INTERVAL)]
-
-    if len(user_message_timestamps[user_id]) > SPAM_THRESHOLD:
-        if user_id not in user_cooldown_multipliers:
-            user_cooldown_multipliers[user_id] = 1
-            await update.message.reply_text("⚠️ **ПРЕДУПРЕЖДЕНИЕ:** Не спамьте, иначе будете временно заблокированы.", parse_mode='Markdown')
-        else:
-            user_cooldown_multipliers[user_id] *= 2
-            cooldown_time = COOLDOWN_BASE_TIME * user_cooldown_multipliers[user_id]
-            user_cooldowns[user_id] = now + timedelta(seconds=cooldown_time)
-            await update.message.reply_text(f"❌ **БЛОКИРОВКА:** Вы были заблокированы на {cooldown_time} секунд за спам.", parse_mode='Markdown')
-            
-        user_message_timestamps[user_id] = []
-        return False
-        
-    return True
-    
 # -------------------- CORE BOT FUNCTIONS --------------------
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -735,10 +593,6 @@ async def handle_group_selection(update: Update, context: ContextTypes.DEFAULT_T
 async def show_main_menu(update: Update, user_id: int):
     """Displays the main menu based on user rights"""
     user_data = get_user(user_id)
-    if not user_data:
-        await update.message.reply_text("Произошла ошибка, попробуйте /start еще раз.")
-        return
-
     role = user_data['role']
     
     welcome_text = "👋 Добро пожаловать!"
@@ -749,39 +603,43 @@ async def show_main_menu(update: Update, user_id: int):
         welcome_text = "👑 Добро пожаловать, Айтишник!"
     elif role == ROLE_PHYSICAL_ORGANIZER:
         welcome_text = "🏃 Добро пожаловать, Физ. орг.!"
-    elif role == ROLE_DEVELOPER:
-        welcome_text = "💻 Добро пожаловать, Разработчик!"
 
-    keyboard_base = [
-        ['📅 Расписание', '📝 ДЗ'],
-        ['ℹ️ Информация', '🔔 Расписание звонков'],
-        ['💡 Предложить идею', '💰 Дать денюжку'],
-        ['🎓 Сменить группу']
-    ]
-
-    keyboard_special = []
-    if role in [ROLE_IT_SPECIALIST, ROLE_DEVELOPER]:
-        keyboard_special.extend([
+    if user_id == DEVELOPER_ID:
+        keyboard = [
+            ['📅 Расписание', '📝 ДЗ'],
+            ['ℹ️ Информация', '💡 Предложения', '💡 Предложить идею'],
             ['📢 Отправить ДЗ', '📢 Отправить уведомление'],
-            ['📊 Создать опрос', '📊 Посмотреть результаты'],
-            ['💡 Предложения', 'Удаление']
-        ])
-    
-    if role in [ROLE_PHYSICAL_ORGANIZER, ROLE_DEVELOPER]:
-        keyboard_special.extend([
-            ['🏃 Отправить спортивное уведомление', 'Удаление']
-        ])
-    
-    if role == ROLE_DEVELOPER:
-        keyboard_special.append(['Список пользователей'])
-    
-    if role == ROLE_STUDENT:
-        keyboard_base.extend([
-            ['📞 Связаться со старостой', '📞 Связаться с замом старосты'],
-            ['📞 Связаться с физоргом']
-        ])
-
-    keyboard = keyboard_base + keyboard_special
+            ['Удалить ДЗ', 'Удалить уведомление', 'Удалить предложения'],
+            ['Удалить пользователя', 'Удалить спортивные уведомления', 'Список пользователей'],
+            ['💰 Дать денюжку', '🔔 Расписание звонков'],
+            ['🎓 Сменить группу']
+        ]
+    elif role == ROLE_IT_SPECIALIST:
+        keyboard = [
+            ['📅 Расписание', '📝 ДЗ'],
+            ['ℹ️ Информация', '💡 Предложения', '💡 Предложить идею'],
+            ['📢 Отправить ДЗ', '📢 Отправить уведомление'],
+            ['Удалить ДЗ', 'Удалить уведомление', 'Удалить предложения'],
+            ['💰 Дать денюжку', '🔔 Расписание звонков'],
+            ['🎓 Сменить группу']
+        ]
+    elif role == ROLE_PHYSICAL_ORGANIZER:
+        keyboard = [
+            ['📅 Расписание', '📝 ДЗ'],
+            ['ℹ️ Информация', '💡 Предложения', '💡 Предложить идею'],
+            ['🏃 Отправить спортивное уведомление', 'Удалить спортивные уведомления'],
+            ['💰 Дать денюжку', '🔔 Расписание звонков'],
+            ['🎓 Сменить группу']
+        ]
+    else:
+        keyboard = [
+            ['📅 Расписание', '📝 ДЗ'],
+            ['ℹ️ Информация', '💡 Предложить идею'],
+            ['💰 Дать денюжку'],
+            ['📞 Связа со старостой', '📞 Связаться с замом старосты'],
+            ['📞 Связаться с физоргом'],
+            ['🎓 Сменить группу']
+        ]
     
     reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
     
@@ -790,34 +648,6 @@ async def show_main_menu(update: Update, user_id: int):
 
     print(f"ЛОГ: Главное меню показано для пользователя {user_data['first_name']} (ID: {user_id}).")
 
-async def show_deletion_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    user_data = get_user(user_id)
-    if not user_data:
-        await update.message.reply_text("Произошла ошибка, попробуйте /start еще раз.")
-        return ConversationHandler.END
-
-    role = user_data['role']
-    keyboard = []
-    
-    if role in [ROLE_IT_SPECIALIST, ROLE_DEVELOPER]:
-        keyboard.extend([
-            ['Удалить ДЗ'],
-            ['Удалить уведомление'],
-            ['Удалить предложения']
-        ])
-    
-    if role in [ROLE_PHYSICAL_ORGANIZER, ROLE_DEVELOPER]:
-        keyboard.append(['Удалить спортивные уведомления'])
-    
-    if role == ROLE_DEVELOPER:
-        keyboard.append(['Удалить пользователя'])
-    
-    keyboard.append(['🔙 Назад'])
-    
-    reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
-    await update.message.reply_text("Выберите, что хотите удалить:", reply_markup=reply_markup)
-    
 async def cancel_conversation(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Cancels the current conversation and returns to the main menu"""
     user = update.effective_user
@@ -834,9 +664,6 @@ async def handle_simple_message(update: Update, context: ContextTypes.DEFAULT_TY
     user_id = user.id
     text = update.message.text
     user_data = get_user(user_id)
-    
-    if not await anti_spam(update, context):
-        return
     
     print(f"ЛОГ: Пользователь {user.first_name} (ID: {user_id}) отправил сообщение: '{text}'")
     
@@ -857,10 +684,10 @@ async def handle_simple_message(update: Update, context: ContextTypes.DEFAULT_TY
     elif text == 'ℹ️ Информация':
         await show_information(update, group_name, role)
 
-    elif text == '💡 Предложения' and (role in [ROLE_IT_SPECIALIST, ROLE_PHYSICAL_ORGANIZER, ROLE_DEVELOPER]):
+    elif text == '💡 Предложения' and (role in [ROLE_IT_SPECIALIST, ROLE_PHYSICAL_ORGANIZER] or user_id in SPECIAL_USERS):
         await show_suggestions(update)
     
-    elif text == 'Список пользователей' and role == ROLE_DEVELOPER:
+    elif text == 'Список пользователей' and user_id == DEVELOPER_ID:
         await show_users_list(update)
 
     elif text == '💰 Дать денюжку':
@@ -889,30 +716,21 @@ async def handle_simple_message(update: Update, context: ContextTypes.DEFAULT_TY
     elif text == '🔙 Назад':
         await show_main_menu(update, user_id)
 
-    elif text == 'Удаление':
-        await show_deletion_menu(update, context)
-
-    elif text == 'Удалить пользователя' and role == ROLE_DEVELOPER:
+    elif text == 'Удалить пользователя' and user_id == DEVELOPER_ID:
         await delete_user_menu(update, context)
 
-    elif text == 'Удалить спортивные уведомления' and (role == ROLE_DEVELOPER or role == ROLE_PHYSICAL_ORGANIZER):
+    elif text == 'Удалить спортивные уведомления' and (user_id == DEVELOPER_ID or role == ROLE_PHYSICAL_ORGANIZER):
         await delete_sport_notification_menu(update, context)
         
-    elif text == 'Удалить предложения' and (role == ROLE_DEVELOPER or role == ROLE_IT_SPECIALIST):
+    elif text == 'Удалить предложения' and (user_id == DEVELOPER_ID or role == ROLE_IT_SPECIALIST):
         await delete_suggestions_menu(update, context)
         
-    elif text == 'Удалить ДЗ' and (role == ROLE_DEVELOPER or role == ROLE_IT_SPECIALIST):
+    elif text == 'Удалить ДЗ' and (user_id == DEVELOPER_ID or role == ROLE_IT_SPECIALIST):
         await delete_homework_menu(update, context)
 
-    elif text == 'Удалить уведомление' and (role == ROLE_DEVELOPER or role == ROLE_IT_SPECIALIST):
+    elif text == 'Удалить уведомление' and (user_id == DEVELOPER_ID or role == ROLE_IT_SPECIALIST):
         await delete_notification_menu(update, context)
 
-    elif text == '📊 Создать опрос' and (role in [ROLE_IT_SPECIALIST, ROLE_PHYSICAL_ORGANIZER, ROLE_DEVELOPER]):
-        await ask_poll_question(update, context)
-
-    elif text == '📊 Посмотреть результаты' and (role in [ROLE_IT_SPECIALIST, ROLE_PHYSICAL_ORGANIZER, ROLE_DEVELOPER]):
-        await show_poll_results(update, context)
-    
     else:
         await update.message.reply_text("Используй кнопки для навигации 👇")
         print(f"ЛОГ: Неизвестная команда от {user.first_name} (ID: {user_id}): '{text}'")
@@ -942,181 +760,76 @@ async def handle_schedule_period(update: Update, context: ContextTypes.DEFAULT_T
 
 # -------------------- DATABASE INTERACTION FUNCTIONS --------------------
 
-def add_homework(subject, task, deadline, group_name, added_by, file_ids=None):
+def add_homework(subject, task, deadline, group_name, added_by, photo_id=None):
     """Adds homework to the database"""
     conn = get_db_connection()
-    if not conn: return
-    try:
-        conn.execute('''INSERT INTO homeworks (subject, task, deadline, group_name, added_by, file_ids)
-                     VALUES (?, ?, ?, ?, ?, ?)''', (subject, task, deadline, group_name, added_by, json.dumps(file_ids)))
-        conn.commit()
-        print(f"ЛОГ: Добавлено ДЗ для группы {group_name}.")
-    except sqlite3.Error as e:
-        print(f"ОШИБКА: Ошибка базы данных при добавлении ДЗ: {e}")
-    finally:
-        conn.close()
+    conn.execute('''INSERT INTO homeworks (subject, task, deadline, group_name, added_by, photo_id)
+                 VALUES (?, ?, ?, ?, ?, ?)''', (subject, task, deadline, group_name, added_by, photo_id))
+    conn.commit()
+    conn.close()
+    print(f"ЛОГ: Добавлено ДЗ для группы {group_name}.")
 
 def get_homeworks(group_name):
     """Gets homework for a group"""
     conn = get_db_connection()
-    if not conn: return []
-    try:
-        homeworks = conn.execute('''SELECT h.*, u.first_name 
-                                 FROM homeworks h JOIN users u ON h.added_by = u.user_id 
-                                 WHERE h.group_name = ? ORDER BY h.created_at DESC''', (group_name,)).fetchall()
-        return homeworks
-    except sqlite3.Error as e:
-        print(f"ОШИБКА: Ошибка базы данных при получении ДЗ: {e}")
-        return []
-    finally:
-        conn.close()
+    homeworks = conn.execute('''SELECT h.*, u.first_name 
+                             FROM homeworks h JOIN users u ON h.added_by = u.user_id 
+                             WHERE h.group_name = ? ORDER BY h.created_at DESC''', (group_name,)).fetchall()
+    conn.close()
+    return homeworks
 
-def add_notification(message, group_name, added_by, file_ids=None):
+def add_notification(message, group_name, added_by, photo_id=None):
     """Adds a notification to the database"""
     conn = get_db_connection()
-    if not conn: return
-    try:
-        conn.execute('''INSERT INTO notifications (message, group_name, added_by, file_ids)
-                     VALUES (?, ?, ?, ?)''', (message, group_name, added_by, json.dumps(file_ids)))
-        conn.commit()
-        print(f"ЛОГ: Добавлено уведомление для группы {group_name}.")
-    except sqlite3.Error as e:
-        print(f"ОШИБКА: Ошибка базы данных при добавлении уведомления: {e}")
-    finally:
-        conn.close()
+    conn.execute('''INSERT INTO notifications (message, group_name, added_by, photo_id)
+                 VALUES (?, ?, ?, ?)''', (message, group_name, added_by, photo_id))
+    conn.commit()
+    conn.close()
+    print(f"ЛОГ: Добавлено уведомление для группы {group_name}.")
 
 def get_notifications(group_name):
     """Gets notifications for a group"""
     conn = get_db_connection()
-    if not conn: return []
-    try:
-        notifications = conn.execute('''SELECT n.*, u.first_name 
-                                     FROM notifications n JOIN users u ON n.added_by = u.user_id 
-                                     WHERE n.group_name = ? ORDER BY n.created_at DESC''', (group_name,)).fetchall()
-        return notifications
-    except sqlite3.Error as e:
-        print(f"ОШИБКА: Ошибка базы данных при получении уведомлений: {e}")
-        return []
-    finally:
-        conn.close()
+    notifications = conn.execute('''SELECT n.*, u.first_name 
+                                 FROM notifications n JOIN users u ON n.added_by = u.user_id 
+                                 WHERE n.group_name = ? ORDER BY n.created_at DESC''', (group_name,)).fetchall()
+    conn.close()
+    return notifications
 
-def add_sport_notification(message, group_name, added_by, file_ids=None):
+def add_sport_notification(message, group_name, added_by, photo_id=None):
     """Adds a sport notification to the database"""
     conn = get_db_connection()
-    if not conn: return
-    try:
-        conn.execute('''INSERT INTO sport_notifications (message, group_name, added_by, file_ids)
-                     VALUES (?, ?, ?, ?)''', (message, group_name, added_by, json.dumps(file_ids)))
-        conn.commit()
-        print(f"ЛОГ: Добавлено спортивное уведомление для группы {group_name}.")
-    except sqlite3.Error as e:
-        print(f"ОШИБКА: Ошибка базы данных при добавлении спортивного уведомления: {e}")
-    finally:
-        conn.close()
+    conn.execute('''INSERT INTO sport_notifications (message, group_name, added_by, photo_id)
+                 VALUES (?, ?, ?, ?)''', (message, group_name, added_by, photo_id))
+    conn.commit()
+    conn.close()
+    print(f"ЛОГ: Добавлено спортивное уведомление для группы {group_name}.")
 
 def get_sport_notifications(group_name):
     """Gets sport notifications for a group"""
     conn = get_db_connection()
-    if not conn: return []
-    try:
-        notifications = conn.execute('''SELECT s.*, u.first_name 
-                                     FROM sport_notifications s JOIN users u ON s.added_by = u.user_id 
-                                     WHERE s.group_name = ? ORDER BY s.created_at DESC''', (group_name,)).fetchall()
-        return notifications
-    except sqlite3.Error as e:
-        print(f"ОШИБКА: Ошибка базы данных при получении спортивных уведомлений: {e}")
-        return []
-    finally:
-        conn.close()
+    notifications = conn.execute('''SELECT s.*, u.first_name 
+                                 FROM sport_notifications s JOIN users u ON s.added_by = u.user_id 
+                                 WHERE s.group_name = ? ORDER BY s.created_at DESC''', (group_name,)).fetchall()
+    conn.close()
+    return notifications
 
-def add_suggestion(user_id, message, file_ids=None):
+def add_suggestion(user_id, message):
     """Adds a suggestion to the database"""
     conn = get_db_connection()
-    if not conn: return
-    try:
-        conn.execute('INSERT INTO suggestions (user_id, message, file_ids) VALUES (?, ?, ?)', (user_id, message, json.dumps(file_ids)))
-        conn.commit()
-        print(f"ЛОГ: Пользователь {user_id} отправил предложение.")
-    except sqlite3.Error as e:
-        print(f"ОШИБКА: Ошибка базы данных при добавлении предложения: {e}")
-    finally:
-        conn.close()
+    conn.execute('INSERT INTO suggestions (user_id, message) VALUES (?, ?)', (user_id, message))
+    conn.commit()
+    conn.close()
+    print(f"ЛОГ: Пользователь {user_id} отправил предложение.")
 
 def get_suggestions():
     """Gets all suggestions"""
     conn = get_db_connection()
-    if not conn: return []
-    try:
-        suggestions = conn.execute('''SELECT s.*, u.first_name, u.username, u.group_name
-                                   FROM suggestions s JOIN users u ON s.user_id = u.user_id 
-                                   ORDER BY s.created_at DESC''').fetchall()
-        return suggestions
-    except sqlite3.Error as e:
-        print(f"ОШИБКА: Ошибка базы данных при получении предложений: {e}")
-        return []
-    finally:
-        conn.close()
-
-def get_suggestion_by_id(suggestion_id):
-    conn = get_db_connection()
-    if not conn: return None
-    try:
-        suggestion = conn.execute('SELECT * FROM suggestions WHERE id = ?', (suggestion_id,)).fetchone()
-        return suggestion
-    except sqlite3.Error as e:
-        print(f"ОШИБКА: Ошибка базы данных при получении предложения: {e}")
-        return None
-    finally:
-        conn.close()
-
-def add_poll(question, options, creator_id):
-    conn = get_db_connection()
-    if not conn: return None
-    try:
-        cur = conn.cursor()
-        cur.execute('INSERT INTO polls (question, options, creator_id) VALUES (?, ?, ?)', (question, json.dumps(options), creator_id))
-        conn.commit()
-        return cur.lastrowid
-    except sqlite3.Error as e:
-        print(f"ОШИБКА: Ошибка базы данных при добавлении опроса: {e}")
-        return None
-    finally:
-        conn.close()
-
-def get_latest_poll():
-    conn = get_db_connection()
-    if not conn: return None
-    try:
-        poll = conn.execute('SELECT * FROM polls ORDER BY created_at DESC LIMIT 1').fetchone()
-        return poll
-    except sqlite3.Error as e:
-        print(f"ОШИБКА: Ошибка базы данных при получении последнего опроса: {e}")
-        return None
-    finally:
-        conn.close()
-
-def record_vote(poll_id, user_id, vote_option):
-    conn = get_db_connection()
-    if not conn: return
-    try:
-        conn.execute('''INSERT OR REPLACE INTO poll_votes (poll_id, user_id, vote_option) VALUES (?, ?, ?)''', (poll_id, user_id, vote_option))
-        conn.commit()
-    except sqlite3.Error as e:
-        print(f"ОШИБКА: Ошибка базы данных при записи голоса: {e}")
-    finally:
-        conn.close()
-
-def get_poll_results(poll_id):
-    conn = get_db_connection()
-    if not conn: return {}
-    try:
-        results = conn.execute('SELECT vote_option, COUNT(*) as count FROM poll_votes WHERE poll_id = ? GROUP BY vote_option', (poll_id,)).fetchall()
-        return {row['vote_option']: row['count'] for row in results}
-    except sqlite3.Error as e:
-        print(f"ОШИБКА: Ошибка базы данных при получении результатов опроса: {e}")
-        return {}
-    finally:
-        conn.close()
+    suggestions = conn.execute('''SELECT s.*, u.first_name, u.username 
+                               FROM suggestions s JOIN users u ON s.user_id = u.user_id 
+                               ORDER BY s.created_at DESC''').fetchall()
+    conn.close()
+    return suggestions
 
 # -------------------- MESSAGE SENDING (DIALOG) FUNCTIONS --------------------
 
@@ -1132,7 +845,7 @@ async def ask_homework_details(update: Update, context: ContextTypes.DEFAULT_TYP
         "Математика\n"
         "Решить задачи 1-10 на странице 45\n"
         "До 15.09\n\n"
-        "Можно прикрепить фото/видео к сообщению",
+        "Можно прикрепить фото к сообщению",
         parse_mode='HTML',
         reply_markup=ReplyKeyboardMarkup([['❌ Отмена']], resize_keyboard=True)
     )
@@ -1144,7 +857,7 @@ async def ask_notification_details(update: Update, context: ContextTypes.DEFAULT
     await update.message.reply_text(
         "📢 <b>Отправка уведомления всем</b>\n\n"
         "Напиши уведомление, которое нужно отправить всем ученикам.\n"
-        "Можно прикрепить фото/видео к сообщению:",
+        "Можно прикрепить фото к сообщению:",
         parse_mode='HTML',
         reply_markup=ReplyKeyboardMarkup([['❌ Отмена']], resize_keyboard=True)
     )
@@ -1156,7 +869,7 @@ async def ask_sport_notification_details(update: Update, context: ContextTypes.D
     await update.message.reply_text(
         "🏃 <b>Отправка спортивного уведомления</b>\n\n"
         "Напиши спортивное уведомление, которое нужно отправить всем ученикам.\n"
-        "Можно прикрепить фото/видео к сообщению:",
+        "Можно прикрепить фото к сообщению:",
         parse_mode='HTML',
         reply_markup=ReplyKeyboardMarkup([['❌ Отмена']], resize_keyboard=True)
     )
@@ -1168,8 +881,7 @@ async def ask_suggestion_details(update: Update, context: ContextTypes.DEFAULT_T
     await update.message.reply_text(
         "💡 <b>Предложение по улучшению бота</b>\n\n"
         "Напиши свое предложение по улучшению бота:\n\n"
-        "Что бы ты хотел добавить или изменить?\n\n"
-        "Можно прикрепить фото/видео",
+        "Что бы ты хотел добавить или изменить?",
         parse_mode='HTML',
         reply_markup=ReplyKeyboardMarkup([['❌ Отмена']], resize_keyboard=True)
     )
@@ -1182,32 +894,15 @@ async def handle_homework_input(update: Update, context: ContextTypes.DEFAULT_TY
     user_id = update.effective_user.id
     user_data = get_user(user_id)
     
-    if user_id not in [uid for uid in SPECIAL_USERS if SPECIAL_USERS[uid]['role'] in [ROLE_IT_SPECIALIST, ROLE_DEVELOPER]]:
+    if user_id not in [uid for uid in SPECIAL_USERS if SPECIAL_USERS[uid]['role'] == ROLE_IT_SPECIALIST] and user_id != DEVELOPER_ID:
         await update.message.reply_text("У вас нет прав для этого действия.")
         return await cancel_conversation(update, context)
 
-    if update.message.media_group_id:
-        if update.message.media_group_id not in multi_photo_state:
-            multi_photo_state[update.message.media_group_id] = {'files': [], 'caption': None}
-        
-        if update.message.photo:
-            multi_photo_state[update.message.media_group_id]['files'].append(('photo', update.message.photo[-1].file_id))
-        elif update.message.video:
-            multi_photo_state[update.message.media_group_id]['files'].append(('video', update.message.video.file_id))
-
-        if update.message.caption:
-            multi_photo_state[update.message.media_group_id]['caption'] = update.message.caption
-        
-        await update.message.reply_text("Получено. Отправьте все файлы, а потом я обработаю их как одно сообщение.", reply_markup=ReplyKeyboardRemove())
-        return AWAITING_HOMEWORK
-
+    group_name = user_data['group_name']
+    
+    photo_id = update.message.photo[-1].file_id if update.message.photo else None
     text = update.message.caption if update.message.caption else update.message.text
-    file_ids = []
-    if update.message.photo:
-        file_ids.append(('photo', update.message.photo[-1].file_id))
-    elif update.message.video:
-        file_ids.append(('video', update.message.video.file_id))
-        
+    
     if text == '❌ Отмена':
         return await cancel_conversation(update, context)
 
@@ -1221,10 +916,10 @@ async def handle_homework_input(update: Update, context: ContextTypes.DEFAULT_TY
         task = lines[1].strip()
         deadline = lines[2].strip()
         
-        add_homework(subject, task, deadline, user_data['group_name'], user_id, [fid[1] for fid in file_ids])
+        add_homework(subject, task, deadline, group_name, user_id, photo_id)
         await update.message.reply_text("✅ ДЗ добавлено и отправляется...", reply_markup=ReplyKeyboardRemove())
-        await send_homework_to_all(context.bot, subject, task, deadline, user_data['group_name'], user_id, file_ids)
-        print(f"ЛОГ: ДЗ добавлено пользователем {user_id} для группы {user_data['group_name']}.")
+        await send_homework_to_all(context.bot, subject, task, deadline, group_name, user_id, photo_id)
+        print(f"ЛОГ: ДЗ добавлено пользователем {user_id} для группы {group_name}.")
         
         await show_main_menu(update, user_id)
         return ConversationHandler.END
@@ -1236,17 +931,13 @@ async def handle_notification_input(update: Update, context: ContextTypes.DEFAUL
     user_id = update.effective_user.id
     user_data = get_user(user_id)
     
-    if user_id not in [uid for uid in SPECIAL_USERS if SPECIAL_USERS[uid]['role'] in [ROLE_IT_SPECIALIST, ROLE_DEVELOPER]]:
+    if user_id not in [uid for uid in SPECIAL_USERS if SPECIAL_USERS[uid]['role'] == ROLE_IT_SPECIALIST] and user_id != DEVELOPER_ID:
         await update.message.reply_text("У вас нет прав для этого действия.")
         return await cancel_conversation(update, context)
 
     group_name = user_data['group_name']
-    file_ids = []
-    if update.message.photo:
-        file_ids.append(('photo', update.message.photo[-1].file_id))
-    if update.message.video:
-        file_ids.append(('video', update.message.video.file_id))
-        
+    
+    photo_id = update.message.photo[-1].file_id if update.message.photo else None
     message_text = update.message.caption if update.message.caption else update.message.text
 
     if message_text == '❌ Отмена':
@@ -1256,9 +947,9 @@ async def handle_notification_input(update: Update, context: ContextTypes.DEFAUL
         await update.message.reply_text("❌ Пожалуйста, добавь текст уведомления.")
         return AWAITING_INFO
 
-    add_notification(message_text, group_name, user_id, [fid[1] for fid in file_ids])
+    add_notification(message_text, group_name, user_id, photo_id)
     await update.message.reply_text("✅ Уведомление добавлено и отправляется...", reply_markup=ReplyKeyboardRemove())
-    await send_notification_to_all(context.bot, message_text, group_name, user_id, file_ids)
+    await send_notification_to_all(context.bot, message_text, group_name, user_id, photo_id)
     print(f"ЛОГ: Уведомление отправлено пользователем {user_id} для группы {group_name}.")
     
     await show_main_menu(update, user_id)
@@ -1268,17 +959,13 @@ async def handle_sport_input(update: Update, context: ContextTypes.DEFAULT_TYPE)
     user_id = update.effective_user.id
     user_data = get_user(user_id)
     
-    if user_id not in [uid for uid in SPECIAL_USERS if SPECIAL_USERS[uid]['role'] in [ROLE_PHYSICAL_ORGANIZER, ROLE_DEVELOPER]]:
+    if user_id not in [uid for uid in SPECIAL_USERS if SPECIAL_USERS[uid]['role'] == ROLE_PHYSICAL_ORGANIZER] and user_id != DEVELOPER_ID:
         await update.message.reply_text("У вас нет прав для этого действия.")
         return await cancel_conversation(update, context)
 
     group_name = user_data['group_name']
-    file_ids = []
-    if update.message.photo:
-        file_ids.append(('photo', update.message.photo[-1].file_id))
-    if update.message.video:
-        file_ids.append(('video', update.message.video.file_id))
 
+    photo_id = update.message.photo[-1].file_id if update.message.photo else None
     message_text = update.message.caption if update.message.caption else update.message.text
 
     if message_text == '❌ Отмена':
@@ -1288,9 +975,9 @@ async def handle_sport_input(update: Update, context: ContextTypes.DEFAULT_TYPE)
         await update.message.reply_text("❌ Пожалуйста, добавь текст спортивного уведомления.")
         return AWAITING_SPORT
     
-    add_sport_notification(message_text, group_name, user_id, [fid[1] for fid in file_ids])
+    add_sport_notification(message_text, group_name, user_id, photo_id)
     await update.message.reply_text("✅ Спортивное уведомление добавлено и отправляется...", reply_markup=ReplyKeyboardRemove())
-    await send_sport_notification_to_all(context.bot, message_text, group_name, user_id, file_ids)
+    await send_sport_notification_to_all(context.bot, message_text, group_name, user_id, photo_id)
     print(f"ЛОГ: Спортивное уведомление отправлено пользователем {user_id} для группы {group_name}.")
     
     await show_main_menu(update, user_id)
@@ -1300,11 +987,6 @@ async def handle_suggestion_input(update: Update, context: ContextTypes.DEFAULT_
     user_id = update.effective_user.id
     user_data = get_user(user_id)
     text = update.message.text
-    file_ids = []
-    if update.message.photo:
-        file_ids.append(('photo', update.message.photo[-1].file_id))
-    if update.message.video:
-        file_ids.append(('video', update.message.video.file_id))
 
     if text == '❌ Отмена':
         return await cancel_conversation(update, context)
@@ -1313,7 +995,7 @@ async def handle_suggestion_input(update: Update, context: ContextTypes.DEFAULT_
         await update.message.reply_text("❌ Пожалуйста, напиши свое предложение.")
         return AWAITING_SUGGESTION
 
-    add_suggestion(user_id, text, [fid[1] for fid in file_ids])
+    add_suggestion(user_id, text)
     
     for special_id in SPECIAL_USERS:
         try:
@@ -1329,129 +1011,9 @@ async def handle_suggestion_input(update: Update, context: ContextTypes.DEFAULT_
     print(f"ЛОГ: Пользователь {user_id} отправил предложение.")
     return ConversationHandler.END
 
-async def handle_suggestion_reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    if user_id not in [uid for uid in SPECIAL_USERS]:
-        await update.message.reply_text("У вас нет прав для ответа на предложения.")
-        return ConversationHandler.END
+# --- NOTIFICATION SENDING LOGIC ---
 
-    text = update.message.text
-    if text == '❌ Отмена':
-        return await cancel_conversation(update, context)
-    
-    original_user_id = context.user_data.get('suggestion_user_id')
-    if not original_user_id:
-        await update.message.reply_text("❌ Произошла ошибка. Не удалось найти автора предложения.")
-        return await cancel_conversation(update, context)
-
-    try:
-        await context.bot.send_message(
-            original_user_id,
-            f"📨 **Ответ на ваше предложение:**\n\n{text}",
-            parse_mode='Markdown'
-        )
-        await update.message.reply_text("✅ Ваш ответ отправлен.", reply_markup=ReplyKeyboardRemove())
-    except Exception as e:
-        await update.message.reply_text(f"❌ Не удалось отправить ответ: {e}", reply_markup=ReplyKeyboardRemove())
-
-    await show_main_menu(update, user_id)
-    return ConversationHandler.END
-
-# --- POLL FUNCTIONS ---
-
-async def ask_poll_question(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    user_data = get_user(user_id)
-    if not user_data or user_data['role'] not in [ROLE_IT_SPECIALIST, ROLE_PHYSICAL_ORGANIZER, ROLE_DEVELOPER]:
-        await update.message.reply_text("У вас нет прав для создания опросов.")
-        return ConversationHandler.END
-    
-    await update.message.reply_text("✍️ Напишите вопрос для опроса:", reply_markup=ReplyKeyboardMarkup([['❌ Отмена']], resize_keyboard=True))
-    return AWAITING_POLL_QUESTION
-
-async def handle_poll_question(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    question = update.message.text
-    context.user_data['poll_question'] = question
-    await update.message.reply_text("📝 Теперь напишите варианты ответов, каждый с новой строки (от 2 до 10 вариантов):", reply_markup=ReplyKeyboardMarkup([['❌ Отмена']], resize_keyboard=True))
-    return AWAITING_POLL_OPTIONS
-
-async def handle_poll_options(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    question = context.user_data.get('poll_question')
-    options = [opt.strip() for opt in update.message.text.split('\n') if opt.strip()]
-
-    if not (2 <= len(options) <= 10):
-        await update.message.reply_text("❌ Количество вариантов должно быть от 2 до 10. Попробуйте еще раз.")
-        return AWAITING_POLL_OPTIONS
-
-    poll_id = add_poll(question, options, user_id)
-    if not poll_id:
-        await update.message.reply_text("❌ Не удалось создать опрос. Попробуйте позже.")
-        return await cancel_conversation(update, context)
-
-    poll_text = f"📊 **НОВЫЙ ОПРОС**\n\n**{question}**\n\n"
-    keyboard = [[InlineKeyboardButton(option, callback_data=f"poll_{poll_id}_{i}")] for i, option in enumerate(options)]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-
-    users = get_all_users()
-    for user in users:
-        try:
-            await context.bot.send_message(user['user_id'], poll_text, reply_markup=reply_markup, parse_mode='Markdown')
-        except Exception as e:
-            print(f"Не удалось отправить опрос пользователю {user['user_id']}: {e}")
-    
-    await update.message.reply_text("✅ Опрос успешно создан и отправлен всем пользователям!", reply_markup=ReplyKeyboardRemove())
-    return await show_main_menu(update, user_id)
-
-async def handle_poll_vote_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-
-    user_id = query.from_user.id
-    _, poll_id, option_index = query.data.split('_')
-    poll_id = int(poll_id)
-    option_index = int(option_index)
-
-    conn = get_db_connection()
-    poll = conn.execute('SELECT * FROM polls WHERE id = ?', (poll_id,)).fetchone()
-    conn.close()
-
-    if not poll:
-        await query.edit_message_text("❌ Этот опрос больше недействителен.")
-        return
-
-    options = json.loads(poll['options'])
-    vote_option = options[option_index]
-    
-    record_vote(poll_id, user_id, vote_option)
-    
-    await query.edit_message_text(f"✅ Вы проголосовали за: **{vote_option}**", parse_mode='Markdown')
-
-async def show_poll_results(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    latest_poll = get_latest_poll()
-    if not latest_poll:
-        await update.message.reply_text("❌ Пока нет активных опросов.")
-        return
-    
-    poll_id = latest_poll['id']
-    question = latest_poll['question']
-    options = json.loads(latest_poll['options'])
-    results = get_poll_results(poll_id)
-    
-    total_votes = sum(results.values())
-    
-    results_text = f"📊 **Результаты опроса:**\n\n**{question}**\n\n"
-    
-    for option in options:
-        count = results.get(option, 0)
-        percentage = (count / total_votes) * 100 if total_votes > 0 else 0
-        results_text += f"**{option}**: {count} голосов ({percentage:.1f}%)\n"
-    
-    await update.message.reply_text(results_text, parse_mode='Markdown')
-
-# -------------------- NOTIFICATION SENDING LOGIC --------------------
-
-async def send_homework_to_all(bot, subject, task, deadline, group_name, added_by, file_ids=None):
+async def send_homework_to_all(bot, subject, task, deadline, group_name, added_by, photo_id=None):
     """Sends homework to all users in a group"""
     homework_text = (
         f"📝 <b>НОВОЕ ДОМАШНЕЕ ЗАДАНИЕ</b>\n\n"
@@ -1463,65 +1025,38 @@ async def send_homework_to_all(bot, subject, task, deadline, group_name, added_b
     
     users = get_db_connection().execute('SELECT user_id FROM users WHERE group_name = ?', (group_name,)).fetchall()
     
-    media = []
-    if file_ids:
-        for file_id in file_ids:
-            if 'photo' in file_id:
-                media.append(InputMediaPhoto(media=file_id['photo']))
-            elif 'video' in file_id:
-                media.append(InputMediaVideo(media=file_id['video']))
-    
     for user in users:
         try:
-            if media:
-                media[0].caption = homework_text
-                await bot.send_media_group(chat_id=user['user_id'], media=media)
+            if photo_id:
+                await bot.send_photo(chat_id=user['user_id'], photo=photo_id, caption=homework_text, parse_mode='HTML')
             else:
                 await bot.send_message(user['user_id'], homework_text, parse_mode='HTML')
         except Exception as e:
             print(f"ОШИБКА: Не удалось отправить ДЗ пользователю {user['user_id']}: {e}")
 
-async def send_notification_to_all(bot, message, group_name, added_by, file_ids=None):
+async def send_notification_to_all(bot, message, group_name, added_by, photo_id=None):
     """Sends a notification to all users in a group"""
     notification_text = (f"📢 <b>ВАЖНОЕ УВЕДОМЛЕНИЕ</b>\n\n{message}\n\n👥 <b>Группа:</b> {group_name}")
     users = get_db_connection().execute('SELECT user_id FROM users WHERE group_name = ?', (group_name,)).fetchall()
-
-    media = []
-    if file_ids:
-        for file_id in file_ids:
-            if 'photo' in file_id:
-                media.append(InputMediaPhoto(media=file_id['photo']))
-            elif 'video' in file_id:
-                media.append(InputMediaVideo(media=file_id['video']))
     
     for user in users:
         try:
-            if media:
-                media[0].caption = notification_text
-                await bot.send_media_group(chat_id=user['user_id'], media=media)
+            if photo_id:
+                await bot.send_photo(chat_id=user['user_id'], photo=photo_id, caption=notification_text, parse_mode='HTML')
             else:
                 await bot.send_message(user['user_id'], notification_text, parse_mode='HTML')
         except Exception as e:
             print(f"ОШИБКА: Не удалось отправить уведомление пользователю {user['user_id']}: {e}")
 
-async def send_sport_notification_to_all(bot, message, group_name, added_by, file_ids=None):
+async def send_sport_notification_to_all(bot, message, group_name, added_by, photo_id=None):
     """Sends a sport notification to all users in a group"""
     sport_text = (f"🏃 <b>СПОРТИВНОЕ УВЕДОМЛЕНИЕ</b>\n\n{message}\n\n👥 <b>Группа:</b> {group_name}")
     users = get_db_connection().execute('SELECT user_id FROM users WHERE group_name = ?', (group_name,)).fetchall()
 
-    media = []
-    if file_ids:
-        for file_id in file_ids:
-            if 'photo' in file_id:
-                media.append(InputMediaPhoto(media=file_id['photo']))
-            elif 'video' in file_id:
-                media.append(InputMediaVideo(media=file_id['video']))
-
     for user in users:
         try:
-            if media:
-                media[0].caption = sport_text
-                await bot.send_media_group(chat_id=user['user_id'], media=media)
+            if photo_id:
+                await bot.send_photo(chat_id=user['user_id'], photo=photo_id, caption=sport_text, parse_mode='HTML')
             else:
                 await bot.send_message(user['user_id'], sport_text, parse_mode='HTML')
         except Exception as e:
@@ -1545,12 +1080,8 @@ async def show_homework(update: Update, group_name: str):
             f"👤 <b>Добавил:</b> {hw['first_name']}\n"
             f"📅 <b>Дата:</b> {datetime.fromisoformat(hw['created_at']).strftime('%d.%m.%Y %H:%M')}"
         )
-        file_ids = json.loads(hw['file_ids']) if hw['file_ids'] else []
-        if file_ids:
-            await update.message.reply_photo(photo=file_ids[0], caption=hw_text, parse_mode='HTML')
-            if len(file_ids) > 1:
-                media = [InputMediaPhoto(media=fid) for fid in file_ids[1:]]
-                await update.message.reply_media_group(media=media)
+        if hw['photo_id']:
+            await update.message.reply_photo(photo=hw['photo_id'], caption=hw_text, parse_mode='HTML')
         else:
             await update.message.reply_text(hw_text, parse_mode='HTML')
     
@@ -1574,9 +1105,8 @@ async def show_information(update: Update, group_name: str, role: str):
         await update.message.reply_text("📢 <b>Важные уведомления:</b>", parse_mode='HTML')
         for notif in notifications[:2]:
             notif_text = f"{notif['message']}\n\n👤 <b>От:</b> {notif['first_name']} | 📅 {datetime.fromisoformat(notif['created_at']).strftime('%d.%m.%Y')}"
-            file_ids = json.loads(notif['file_ids']) if notif['file_ids'] else []
-            if file_ids:
-                await update.message.reply_photo(photo=file_ids[0], caption=notif_text)
+            if notif['photo_id']:
+                await update.message.reply_photo(photo=notif['photo_id'], caption=notif_text)
             else:
                 await update.message.reply_text(notif_text)
     
@@ -1584,9 +1114,8 @@ async def show_information(update: Update, group_name: str, role: str):
         await update.message.reply_text("🏃 <b>Спортивные уведомления:</b>", parse_mode='HTML')
         for sport in sport_notifications[:2]:
             sport_text = f"{sport['message']}\n\n👤 <b>От:</b> {sport['first_name']} | 📅 {datetime.fromisoformat(sport['created_at']).strftime('%d.%m.%Y')}"
-            file_ids = json.loads(sport['file_ids']) if sport['file_ids'] else []
-            if file_ids:
-                await update.message.reply_photo(photo=file_ids[0], caption=sport_text)
+            if sport['photo_id']:
+                await update.message.reply_photo(photo=sport['photo_id'], caption=sport_text)
             else:
                 await update.message.reply_text(sport_text)
 
@@ -1597,52 +1126,11 @@ async def show_suggestions(update: Update):
         await update.message.reply_text("📭 Пока нет предложений от учеников")
         return
     
-    for s in suggestions[:5]:
+    suggestions_text = "💡 <b>Предложения от учеников</b>\n\n"
+    for i, s in enumerate(suggestions[:5], 1):
         username = f"@{s['username']}" if s['username'] else s['first_name']
-        suggestion_text = (
-            f"💡 **Предложение от {s['first_name']} ({s['group_name']})**\n\n"
-            f"**{s['message']}**\n\n"
-            f"**Юзер:** {username}\n"
-            f"**Дата:** {datetime.fromisoformat(s['created_at']).strftime('%d.%m.%Y')}"
-        )
-        
-        file_ids = json.loads(s['file_ids']) if s['file_ids'] else []
-        keyboard = [[InlineKeyboardButton("💬 Ответить", callback_data=f"reply_sugg_{s['id']}")]]
-        
-        if file_ids:
-            media = []
-            for file_id in file_ids:
-                # Определяем тип файла по расширению или по контексту
-                if file_id.endswith('.mp4') or 'video' in file_id:
-                    media.append(InputMediaVideo(media=file_id))
-                else:
-                    media.append(InputMediaPhoto(media=file_id))
-            
-            # Первый элемент медиа-группы будет с подписью
-            media[0].caption = suggestion_text
-            
-            await update.message.reply_media_group(media=media)
-            await update.message.reply_text("Нажмите, чтобы ответить:", reply_markup=InlineKeyboardMarkup(keyboard))
-        else:
-            await update.message.reply_text(suggestion_text, parse_mode='Markdown', reply_markup=InlineKeyboardMarkup(keyboard))
-
-async def handle_reply_suggestion_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-
-    suggestion_id = int(query.data.split('_')[2])
-    suggestion = get_suggestion_by_id(suggestion_id)
-    if not suggestion:
-        await query.edit_message_text("❌ Предложение не найдено.")
-        return
-
-    context.user_data['suggestion_user_id'] = suggestion['user_id']
-    await context.bot.send_message(
-        query.from_user.id,
-        "Напишите свой ответ на предложение:",
-        reply_markup=ReplyKeyboardMarkup([['❌ Отмена']], resize_keyboard=True)
-    )
-    return AWAITING_SUGGESTION_REPLY
+        suggestions_text += f"{i}. {s['message']}\n👤 {username} | 📅 {datetime.fromisoformat(s['created_at']).strftime('%d.%m.%Y')}\n\n"
+    await update.message.reply_text(suggestions_text, parse_mode='HTML')
 
 async def show_users_list(update: Update):
     """Shows a list of all users for the developer"""
@@ -1753,8 +1241,9 @@ async def delete_notification_menu(update: Update, context: ContextTypes.DEFAULT
         
     user_data = get_user(user_id)
     notifications = get_notifications(user_data['group_name'])
+    sport_notifications = get_sport_notifications(user_data['group_name'])
     
-    if not notifications:
+    if not notifications and not sport_notifications:
         await update.message.reply_text("📢 Нет уведомлений для удаления.")
         return ConversationHandler.END
 
@@ -1762,6 +1251,10 @@ async def delete_notification_menu(update: Update, context: ContextTypes.DEFAULT
     for n in notifications[:5]:
         button_text = f"📢 {n['message'][:20]}..."
         keyboard.append([InlineKeyboardButton(button_text, callback_data=f"del_notif_{n['id']}")])
+    
+    for s in sport_notifications[:5]:
+        button_text = f"🏃 {s['message'][:20]}..."
+        keyboard.append([InlineKeyboardButton(button_text, callback_data=f"del_sport_{s['id']}")])
 
     await update.message.reply_text("Выберите уведомление для удаления:", reply_markup=InlineKeyboardMarkup(keyboard))
     return AWAITING_INFO_DELETE
@@ -1826,6 +1319,7 @@ async def handle_delete_callback(update: Update, context: ContextTypes.DEFAULT_T
     await query.answer()
 
     parts = query.data.split('_')
+    action = parts[0]
     data_type = parts[1]
     item_id = int(parts[2])
     
@@ -1906,24 +1400,19 @@ def main():
             MessageHandler(filters.Regex('^📢 Отправить уведомление$'), ask_notification_details),
             MessageHandler(filters.Regex('^🏃 Отправить спортивное уведомление$'), ask_sport_notification_details),
             MessageHandler(filters.Regex('^💡 Предложить идею$'), ask_suggestion_details),
-            MessageHandler(filters.Regex('^Удаление$'), show_deletion_menu),
             MessageHandler(filters.Regex('^Удалить ДЗ$'), delete_homework_menu),
             MessageHandler(filters.Regex('^Удалить уведомление$'), delete_notification_menu),
             MessageHandler(filters.Regex('^Удалить спортивные уведомления$'), delete_sport_notification_menu),
             MessageHandler(filters.Regex('^Удалить предложения$'), delete_suggestions_menu),
             MessageHandler(filters.Regex('^Удалить пользователя$'), delete_user_menu),
             MessageHandler(filters.Regex('^🎓 Сменить группу$'), ask_user_group),
-            MessageHandler(filters.Regex('^📊 Создать опрос$'), ask_poll_question),
         ],
         states={
             AWAITING_GROUP: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_group_selection)],
-            AWAITING_HOMEWORK: [MessageHandler(filters.TEXT | filters.PHOTO | filters.VIDEO, handle_homework_input)],
-            AWAITING_INFO: [MessageHandler(filters.TEXT | filters.PHOTO | filters.VIDEO, handle_notification_input)],
-            AWAITING_SPORT: [MessageHandler(filters.TEXT | filters.PHOTO | filters.VIDEO, handle_sport_input)],
-            AWAITING_SUGGESTION: [MessageHandler(filters.TEXT | filters.PHOTO | filters.VIDEO, handle_suggestion_input)],
-            AWAITING_POLL_QUESTION: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_poll_question)],
-            AWAITING_POLL_OPTIONS: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_poll_options)],
-            AWAITING_SUGGESTION_REPLY: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_suggestion_reply)],
+            AWAITING_HOMEWORK: [MessageHandler(filters.TEXT | filters.PHOTO, handle_homework_input)],
+            AWAITING_INFO: [MessageHandler(filters.TEXT | filters.PHOTO, handle_notification_input)],
+            AWAITING_SPORT: [MessageHandler(filters.TEXT | filters.PHOTO, handle_sport_input)],
+            AWAITING_SUGGESTION: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_suggestion_input)],
             AWAITING_HOMEWORK_DELETE: [CallbackQueryHandler(handle_delete_callback, pattern='^del_hw_')],
             AWAITING_INFO_DELETE: [CallbackQueryHandler(handle_delete_callback, pattern='^del_notif_')],
             AWAITING_SPORT_DELETE: [CallbackQueryHandler(handle_delete_callback, pattern='^del_sport_')],
@@ -1939,8 +1428,6 @@ def main():
     
     app.add_handler(conv_handler)
     app.add_handler(CallbackQueryHandler(handle_role_fix_callback, pattern='^fix_role_'))
-    app.add_handler(CallbackQueryHandler(handle_reply_suggestion_callback, pattern='^reply_sugg_'))
-    app.add_handler(CallbackQueryHandler(handle_poll_vote_callback, pattern='^poll_'))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_simple_message))
     
     print("ЛОГ: Бот запущен!")
