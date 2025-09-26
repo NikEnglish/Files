@@ -254,6 +254,32 @@ def convert_schedule_keys(raw_data):
     
     return converted_data
 
+def parse_date(date_string):
+    """Парсит дату из различных форматов"""
+    if not date_string:
+        return None
+        
+    try:
+        # Пробуем стандартный формат ISO (2025-09-29T19:00:00Z)
+        if 'T' in date_string and 'Z' in date_string:
+            return datetime.fromisoformat(date_string.replace('Z', '+00:00'))
+        
+        # Пробуем формат с точками (2025.09.29T19:00:00Z)
+        if 'T' in date_string and '.' in date_string.split('T')[0]:
+            date_part, time_part = date_string.split('T')
+            date_part = date_part.replace('.', '-')
+            new_date_string = f"{date_part}T{time_part}"
+            return datetime.fromisoformat(new_date_string.replace('Z', '+00:00'))
+            
+        # Пробуем другие возможные форматы
+        if 'T' in date_string:
+            return datetime.fromisoformat(date_string.replace('Z', ''))
+            
+    except ValueError as e:
+        print(f"ОШИБКА парсинга даты '{date_string}': {e}")
+    
+    return None
+
 def fetch_schedule_data():
     """Fetches schedule data from the website"""
     try:
@@ -282,18 +308,48 @@ def fetch_schedule_data():
 def filter_today_lessons(lessons):
     """Filters lessons for today considering Yekaterinburg time"""
     today_yekat = datetime.now(YEKATERINBURG_TZ).date()
-    return [lesson for lesson in lessons if lesson.get('date') and datetime.fromisoformat(lesson['date'].replace('Z', '+00:00')).astimezone(YEKATERINBURG_TZ).date() == today_yekat]
+    filtered_lessons = []
+    
+    for lesson in lessons:
+        if lesson.get('date'):
+            lesson_date = parse_date(lesson['date'])
+            if lesson_date:
+                lesson_date_yekat = lesson_date.astimezone(YEKATERINBURG_TZ)
+                if lesson_date_yekat.date() == today_yekat:
+                    filtered_lessons.append(lesson)
+    
+    return filtered_lessons
 
 def filter_tomorrow_lessons(lessons):
     """Filters lessons for tomorrow considering Yekaterinburg time"""
     tomorrow_yekat = (datetime.now(YEKATERINBURG_TZ) + timedelta(days=1)).date()
-    return [lesson for lesson in lessons if lesson.get('date') and datetime.fromisoformat(lesson['date'].replace('Z', '+00:00')).astimezone(YEKATERINBURG_TZ).date() == tomorrow_yekat]
+    filtered_lessons = []
+    
+    for lesson in lessons:
+        if lesson.get('date'):
+            lesson_date = parse_date(lesson['date'])
+            if lesson_date:
+                lesson_date_yekat = lesson_date.astimezone(YEKATERINBURG_TZ)
+                if lesson_date_yekat.date() == tomorrow_yekat:
+                    filtered_lessons.append(lesson)
+    
+    return filtered_lessons
 
 def filter_week_lessons(lessons):
     """Filters lessons for the week considering Yekaterinburg time"""
     today_yekat = datetime.now(YEKATERINBURG_TZ).date()
     week_end = today_yekat + timedelta(days=7)
-    return [lesson for lesson in lessons if lesson.get('date') and today_yekat <= datetime.fromisoformat(lesson['date'].replace('Z', '+00:00')).astimezone(YEKATERINBURG_TZ).date() <= week_end]
+    filtered_lessons = []
+    
+    for lesson in lessons:
+        if lesson.get('date'):
+            lesson_date = parse_date(lesson['date'])
+            if lesson_date:
+                lesson_date_yekat = lesson_date.astimezone(YEKATERINBURG_TZ)
+                if today_yekat <= lesson_date_yekat.date() <= week_end:
+                    filtered_lessons.append(lesson)
+    
+    return filtered_lessons
 
 def get_lesson_time(lesson_number, day_of_week):
     """Returns the time of a lesson by its number, adjusted for Saturday"""
@@ -317,14 +373,25 @@ def format_schedule(lessons, title):
     if not lessons:
         return "✅ Нет занятий"
     
-    lessons.sort(key=lambda x: (x.get('date', ''), x.get('lessonNumber', 0)))
+    # Сортируем занятия по дате и номеру пары
+    sorted_lessons = []
+    for lesson in lessons:
+        if lesson.get('date'):
+            lesson_date = parse_date(lesson['date'])
+            if lesson_date:
+                sorted_lessons.append((lesson_date, lesson))
+    
+    if not sorted_lessons:
+        return "✅ Нет занятий с корректными датами"
+    
+    sorted_lessons.sort(key=lambda x: (x[0], x[1].get('lessonNumber', 0)))
     
     result = [f"<b>{title}</b>\n"]
     current_date = None
-    for lesson in lessons:
+    
+    for lesson_date, lesson in sorted_lessons:
         try:
-            lesson_date_utc = datetime.fromisoformat(lesson['date'].replace('Z', '+00:00'))
-            lesson_date_yekat = lesson_date_utc.astimezone(YEKATERINBURG_TZ)
+            lesson_date_yekat = lesson_date.astimezone(YEKATERINBURG_TZ)
             date_str = lesson_date_yekat.strftime('%d.%m.%Y')
             
             if date_str != current_date:
@@ -337,15 +404,20 @@ def format_schedule(lessons, title):
             lesson_number = lesson.get('lessonNumber', 0)
             start_time, end_time = get_lesson_time(lesson_number, day_of_week_num)
             
+            subject = lesson.get('subjectFull', lesson.get('subject', 'N/A'))
+            teacher = lesson.get('teacher', 'N/A')
+            room = lesson.get('room', 'N/A')
+            
             lesson_text = (
                 f"    ⏰ {start_time}-{end_time} | {lesson_number} пара\n"
-                f"    📚 {lesson.get('subjectFull', lesson.get('subject', 'N/A'))}\n"
-                f"    👨‍🏫 {lesson.get('teacher', 'N/A')}\n"
-                f"    🚪 {lesson.get('room', 'N/A')}\n"
+                f"    📚 {subject}\n"
+                f"    👨‍🏫 {teacher}\n"
+                f"    🚪 {room}\n"
             )
             result.append(lesson_text)
         except Exception as e:
             print(f"ОШИБКА: Не удалось отформатировать пару: {e}")
+            print(f"Данные пары: {lesson}")
             continue
     
     result.append(f"\n📊 <b>Всего занятий:</b> {len(lessons)}")
@@ -429,7 +501,13 @@ async def check_schedule_changes(context: ContextTypes.DEFAULT_TYPE):
                 change_message += "🟢 <b>Добавлено:</b>\n"
                 for lesson_json in added_lessons_json:
                     lesson = json.loads(lesson_json)
-                    change_message += f"- {lesson.get('date')} | {lesson.get('subjectFull', lesson.get('subject', 'N/A'))}\n"
+                    subject = lesson.get('subjectFull', lesson.get('subject', 'N/A'))
+                    date_str = ""
+                    if lesson.get('date'):
+                        lesson_date = parse_date(lesson['date'])
+                        if lesson_date:
+                            date_str = lesson_date.astimezone(YEKATERINBURG_TZ).strftime('%d.%m.%Y')
+                    change_message += f"- {date_str} | {subject}\n"
             
             if removed_lessons_json:
                 if added_lessons_json:
@@ -437,7 +515,13 @@ async def check_schedule_changes(context: ContextTypes.DEFAULT_TYPE):
                 change_message += "🔴 <b>Удалено:</b>\n"
                 for lesson_json in removed_lessons_json:
                     lesson = json.loads(lesson_json)
-                    change_message += f"- {lesson.get('date')} | {lesson.get('subjectFull', lesson.get('subject', 'N/A'))}\n"
+                    subject = lesson.get('subjectFull', lesson.get('subject', 'N/A'))
+                    date_str = ""
+                    if lesson.get('date'):
+                        lesson_date = parse_date(lesson['date'])
+                        if lesson_date:
+                            date_str = lesson_date.astimezone(YEKATERINBURG_TZ).strftime('%d.%m.%Y')
+                    change_message += f"- {date_str} | {subject}\n"
             
             users = get_db_connection().execute('SELECT user_id FROM users WHERE group_name = ?', (group_name,)).fetchall()
             for user in users:
@@ -537,19 +621,29 @@ async def check_next_lesson(context: ContextTypes.DEFAULT_TYPE):
                 if user_notification_cache.get(notification_key) is True:
                     continue
 
-                day_of_week_num = now.weekday()
+                lesson_date = parse_date(lesson['date'])
+                if not lesson_date:
+                    continue
+                    
+                lesson_date_yekat = lesson_date.astimezone(YEKATERINBURG_TZ)
+                day_of_week_num = lesson_date_yekat.weekday()
+                
                 start_time_str, _ = get_lesson_time(lesson_number, day_of_week_num)
                 
                 start_time_naive = datetime.strptime(start_time_str, '%H:%M').time()
                 start_time_aware = datetime.combine(now.date(), start_time_naive).replace(tzinfo=YEKATERINBURG_TZ)
                 
                 if now + timedelta(minutes=5) >= start_time_aware and now < start_time_aware:
+                    subject = lesson.get('subjectFull', lesson.get('subject', 'N/A'))
+                    teacher = lesson.get('teacher', 'N/A')
+                    room = lesson.get('room', 'N/A')
+                    
                     next_lesson_text = (
                         f"📅 <b>Начало следующей пары через 5 минут ({group_name})</b>\n\n"
                         f"    ⏰ {get_lesson_time(lesson_number, day_of_week_num)[0]}-{get_lesson_time(lesson_number, day_of_week_num)[1]} | {lesson_number} пара\n"
-                        f"    📚 {lesson.get('subjectFull', lesson.get('subject', 'N/A'))}\n"
-                        f"    👨‍🏫 {lesson.get('teacher', 'N/A')}\n"
-                        f"    🚪 {lesson.get('room', 'N/A')}\n"
+                        f"    📚 {subject}\n"
+                        f"    👨‍🏫 {teacher}\n"
+                        f"    🚪 {room}\n"
                     )
                     
                     try:
@@ -565,7 +659,6 @@ async def check_next_lesson(context: ContextTypes.DEFAULT_TYPE):
     # Clean up old notifications from the cache once a day
     if now.hour == 0 and now.minute == 0:
         user_notification_cache.clear()
-
 # -------------------- CORE BOT FUNCTIONS --------------------
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
