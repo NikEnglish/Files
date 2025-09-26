@@ -214,71 +214,30 @@ def get_all_sport_notifications():
     conn.close()
     return notifications
 
-# -------------------- SCHEDULE FUNCTIONS --------------------
-
-def convert_schedule_keys(raw_data):
-    """Converts encrypted keys to human-readable keys"""
-    converted_data = {}
-    
-    # Маппинг зашифрованных ключей на нормальные
-    key_mapping = {
-        "UQuXyqBC": "date",
-        "cQCBWqKn": "group",
-        "M5YIzu1f": "lessonNumber",
-        "fMCy5E03": "type",
-        "HVp2LJzj": "subgroup",
-        "06dwwAd0": "subject",
-        "gbeTv7Dy": "subjectFull",
-        "cyQXN4uo": "faculty",
-        "T7wLN7sY": "room",
-        "5ZnFq6xT": "teacher",
-        "7ogfRV0t": "teacherId",
-        "EALV5nW1": "week",
-        "o7OUjsQh": "startTime",
-        "d4UdBHV7": "endTime"
-    }
-    
-    for group_name, lessons in raw_data.items():
-        converted_lessons = []
-        
-        for lesson in lessons:
-            converted_lesson = {}
-            for encrypted_key, value in lesson.items():
-                if encrypted_key in key_mapping:
-                    normal_key = key_mapping[encrypted_key]
-                    converted_lesson[normal_key] = value
-            
-            converted_lessons.append(converted_lesson)
-        
-        converted_data[group_name] = converted_lessons
-    
-    return converted_data
+# -------------------- SCHEDULE FUNCTIONS (ПРОСТОЙ ПОДХОД) --------------------
 
 def parse_date(date_string):
-    """Парсит дату из различных форматов"""
-    if not date_string:
-        return None
-        
+    """Парсит дату из строки"""
     try:
-        # Пробуем стандартный формат ISO (2025-09-29T19:00:00Z)
-        if 'T' in date_string and 'Z' in date_string:
-            return datetime.fromisoformat(date_string.replace('Z', '+00:00'))
-        
-        # Пробуем формат с точками (2025.09.29T19:00:00Z)
-        if 'T' in date_string and '.' in date_string.split('T')[0]:
-            date_part, time_part = date_string.split('T')
-            date_part = date_part.replace('.', '-')
-            new_date_string = f"{date_part}T{time_part}"
-            return datetime.fromisoformat(new_date_string.replace('Z', '+00:00'))
-            
-        # Пробуем другие возможные форматы
-        if 'T' in date_string:
-            return datetime.fromisoformat(date_string.replace('Z', ''))
-            
-    except ValueError as e:
-        print(f"ОШИБКА парсинга даты '{date_string}': {e}")
-    
-    return None
+        return datetime.fromisoformat(date_string.replace('Z', '+00:00'))
+    except:
+        return None
+
+def get_lesson_time(lesson_number, day_of_week):
+    """Returns the time of a lesson by its number, adjusted for Saturday"""
+    lesson_times = {
+        1: ("08:30", "10:05"), 2: ("10:15", "11:50"), 3: ("12:40", "14:15"),
+        4: ("14:25", "16:00"), 5: ("16:10", "17:45"), 6: ("17:55", "19:30"),
+    }
+    saturday_times = {
+        1: ("8:30", "9:45"), 2: ("9:55", "11:10"), 3: ("11:20", "12:40"), 
+        4: ("13:20", "14:35"), 5: ("14:45", "16:00"), 6: ("16:10", "17:25")
+    }
+
+    if day_of_week == 5:
+        return saturday_times.get(lesson_number, ("❓", "❓"))
+    else:
+        return lesson_times.get(lesson_number, ("❓", "❓"))
 
 def fetch_schedule_data():
     """Fetches schedule data from the website"""
@@ -296,132 +255,85 @@ def fetch_schedule_data():
 
         schedule_raw = match.group(1)
         schedule_json_str = schedule_raw.replace(";", "")
-        raw_data = json.loads(schedule_json_str)
-        
-        # Конвертируем зашифрованные ключи в нормальные
-        return convert_schedule_keys(raw_data)
+        return json.loads(schedule_json_str)
     
     except Exception as e:
         print(f"ОШИБКА: Не удалось загрузить расписание: {e}")
         return None
 
-def filter_today_lessons(lessons):
-    """Filters lessons for today considering Yekaterinburg time"""
-    today_yekat = datetime.now(YEKATERINBURG_TZ).date()
-    filtered_lessons = []
-    
+def filter_lessons_by_date(lessons, target_date):
+    """Фильтрует занятия по дате"""
+    filtered = []
     for lesson in lessons:
-        if lesson.get('date'):
-            lesson_date = parse_date(lesson['date'])
+        values = list(lesson.values())
+        if len(values) > 0:
+            lesson_date = parse_date(values[0])
             if lesson_date:
                 lesson_date_yekat = lesson_date.astimezone(YEKATERINBURG_TZ)
-                if lesson_date_yekat.date() == today_yekat:
-                    filtered_lessons.append(lesson)
-    
-    return filtered_lessons
+                if lesson_date_yekat.date() == target_date:
+                    filtered.append(lesson)
+    return filtered
 
-def filter_tomorrow_lessons(lessons):
-    """Filters lessons for tomorrow considering Yekaterinburg time"""
-    tomorrow_yekat = (datetime.now(YEKATERINBURG_TZ) + timedelta(days=1)).date()
-    filtered_lessons = []
-    
+def filter_lessons_by_week(lessons, start_date):
+    """Фильтрует занятия на неделю вперед"""
+    filtered = []
+    end_date = start_date + timedelta(days=7)
     for lesson in lessons:
-        if lesson.get('date'):
-            lesson_date = parse_date(lesson['date'])
+        values = list(lesson.values())
+        if len(values) > 0:
+            lesson_date = parse_date(values[0])
             if lesson_date:
                 lesson_date_yekat = lesson_date.astimezone(YEKATERINBURG_TZ)
-                if lesson_date_yekat.date() == tomorrow_yekat:
-                    filtered_lessons.append(lesson)
-    
-    return filtered_lessons
+                if start_date <= lesson_date_yekat.date() <= end_date:
+                    filtered.append(lesson)
+    return filtered
 
-def filter_week_lessons(lessons):
-    """Filters lessons for the week considering Yekaterinburg time"""
-    today_yekat = datetime.now(YEKATERINBURG_TZ).date()
-    week_end = today_yekat + timedelta(days=7)
-    filtered_lessons = []
+def format_lesson(lesson, show_date=True):
+    """Форматирует одно занятие"""
+    values = list(lesson.values())
+    if len(values) < 10:
+        return "❌ Ошибка формата занятия"
     
-    for lesson in lessons:
-        if lesson.get('date'):
-            lesson_date = parse_date(lesson['date'])
-            if lesson_date:
-                lesson_date_yekat = lesson_date.astimezone(YEKATERINBURG_TZ)
-                if today_yekat <= lesson_date_yekat.date() <= week_end:
-                    filtered_lessons.append(lesson)
-    
-    return filtered_lessons
-
-def get_lesson_time(lesson_number, day_of_week):
-    """Returns the time of a lesson by its number, adjusted for Saturday"""
-    # Standard schedule (Monday-Friday)
-    lesson_times = {
-        1: ("08:30", "10:05"), 2: ("10:15", "11:50"), 3: ("12:40", "14:15"),
-        4: ("14:25", "16:00"), 5: ("16:10", "17:45"), 6: ("17:55", "19:30"),
-    }
-    # Saturday schedule
-    saturday_times = {
-        1: ("8:30", "9:45"), 2: ("9:55", "11:10"), 3: ("11:20", "12:40"), 
-        4: ("13:20", "14:35"), 5: ("14:45", "16:00"), 6: ("16:10", "17:25")
-    }
-
-    if day_of_week == 5: # 5 is Saturday
-        return saturday_times.get(lesson_number, ("❓", "❓"))
-    else:
-        return lesson_times.get(lesson_number, ("❓", "❓"))
-
-def format_schedule(lessons, title):
-    if not lessons:
-        return "✅ Нет занятий"
-    
-    # Сортируем занятия по дате и номеру пары
-    sorted_lessons = []
-    for lesson in lessons:
-        if lesson.get('date'):
-            lesson_date = parse_date(lesson['date'])
-            if lesson_date:
-                sorted_lessons.append((lesson_date, lesson))
-    
-    if not sorted_lessons:
-        return "✅ Нет занятий с корректными датами"
-    
-    sorted_lessons.sort(key=lambda x: (x[0], x[1].get('lessonNumber', 0)))
-    
-    result = [f"<b>{title}</b>\n"]
-    current_date = None
-    
-    for lesson_date, lesson in sorted_lessons:
-        try:
-            lesson_date_yekat = lesson_date.astimezone(YEKATERINBURG_TZ)
-            date_str = lesson_date_yekat.strftime('%d.%m.%Y')
+    try:
+        # Распределяем значения по порядку
+        date_str = values[0]
+        group = values[1]  # Не используем, т.к. знаем группу
+        lesson_number = values[2]
+        lesson_type = values[3]
+        subgroup = values[4]
+        subject_short = values[5]
+        subject_full = values[6]
+        faculty = values[7]
+        room = values[8]
+        teacher = values[9]
+        
+        lesson_date = parse_date(date_str)
+        if not lesson_date:
+            return "❌ Ошибка даты"
+        
+        lesson_date_yekat = lesson_date.astimezone(YEKATERINBURG_TZ)
+        day_of_week_num = lesson_date_yekat.weekday()
+        start_time, end_time = get_lesson_time(lesson_number, day_of_week_num)
+        
+        result = ""
+        if show_date:
+            day_names = ['Понедельник', 'Вторник', 'Среда', 'Четверг', 'Пятница', 'Суббота', 'Воскресенье']
+            date_formatted = lesson_date_yekat.strftime('%d.%m.%Y')
+            result = f"📅 {date_formatted} ({day_names[day_of_week_num]})\n"
+        
+        result += f"⏰ {start_time}-{end_time} | {lesson_number} пара\n"
+        result += f"📚 {subject_full if subject_full != subject_short else subject_short}\n"
+        result += f"👨‍🏫 {teacher}\n"
+        result += f"🚪 {room}"
+        
+        if subgroup != 0:
+            result += f" | Подгруппа {subgroup}"
             
-            if date_str != current_date:
-                current_date = date_str
-                day_names = ['Понедельник', 'Вторник', 'Среда', 'Четверг', 'Пятница', 'Суббота', 'Воскресенье']
-                day_of_week_num = lesson_date_yekat.weekday()
-                day_of_week = day_names[day_of_week_num]
-                result.append(f"\n📅 <b>{date_str} ({day_of_week})</b>")
-            
-            lesson_number = lesson.get('lessonNumber', 0)
-            start_time, end_time = get_lesson_time(lesson_number, day_of_week_num)
-            
-            subject = lesson.get('subjectFull', lesson.get('subject', 'N/A'))
-            teacher = lesson.get('teacher', 'N/A')
-            room = lesson.get('room', 'N/A')
-            
-            lesson_text = (
-                f"    ⏰ {start_time}-{end_time} | {lesson_number} пара\n"
-                f"    📚 {subject}\n"
-                f"    👨‍🏫 {teacher}\n"
-                f"    🚪 {room}\n"
-            )
-            result.append(lesson_text)
-        except Exception as e:
-            print(f"ОШИБКА: Не удалось отформатировать пару: {e}")
-            print(f"Данные пары: {lesson}")
-            continue
-    
-    result.append(f"\n📊 <b>Всего занятий:</b> {len(lessons)}")
-    return "\n".join(result)
+        return result
+        
+    except Exception as e:
+        print(f"Ошибка форматирования занятия: {e}")
+        return "❌ Ошибка форматирования"
 
 def get_schedule(period, group_name):
     """Gets and formats the schedule for the selected period and group"""
@@ -449,14 +361,15 @@ def get_schedule(period, group_name):
 
         lessons = schedule_data[group_name]
         
+        # Фильтрация по периоду
         if period == '📅 Сегодня':
-            filtered_lessons = filter_today_lessons(lessons)
+            filtered_lessons = filter_lessons_by_date(lessons, now.date())
             title = f"📅 Расписание на сегодня ({group_name})"
         elif period == '📅 Завтра':
-            filtered_lessons = filter_tomorrow_lessons(lessons)
+            filtered_lessons = filter_lessons_by_date(lessons, (now + timedelta(days=1)).date())
             title = f"📅 Расписание на завтра ({group_name})"
         elif period == '📅 Неделя':
-            filtered_lessons = filter_week_lessons(lessons)
+            filtered_lessons = filter_lessons_by_week(lessons, now.date())
             title = f"📅 Расписание на неделю ({group_name})"
         else:
             filtered_lessons = lessons
@@ -465,72 +378,56 @@ def get_schedule(period, group_name):
         if not filtered_lessons:
             return f"✅ Нет занятий для выбранного периода."
 
-        return format_schedule(filtered_lessons, title)
+        # Сортируем занятия по дате
+        filtered_lessons.sort(key=lambda x: list(x.values())[0] if len(x.values()) > 0 else "")
+        
+        result = [f"<b>{title}</b>\n"]
+        current_date = None
+        
+        for lesson in filtered_lessons:
+            values = list(lesson.values())
+            if len(values) > 0:
+                lesson_date = parse_date(values[0])
+                if lesson_date:
+                    lesson_date_yekat = lesson_date.astimezone(YEKATERINBURG_TZ)
+                    date_str = lesson_date_yekat.strftime('%d.%m.%Y')
+                    
+                    show_date = date_str != current_date
+                    if show_date:
+                        current_date = date_str
+                    
+                    lesson_text = format_lesson(lesson, show_date)
+                    result.append(lesson_text + "\n")
+        
+        result.append(f"\n📊 <b>Всего занятий:</b> {len(filtered_lessons)}")
+        return "\n".join(result)
 
     except Exception as e:
         print(f"ОШИБКА: Произошла ошибка при получении расписания: {str(e)}")
         return f"❌ Произошла ошибка: {str(e)}"
 
 async def check_schedule_changes(context: ContextTypes.DEFAULT_TYPE):
-    """Checks for schedule changes and notifies users with diff"""
+    """Checks for schedule changes and notifies users"""
     global schedule_cache, last_schedule_check
     
     print("ЛОГ: Проверка изменений в расписании...")
     new_schedule = fetch_schedule_data()
     
     if not new_schedule:
-        print("ЛОГ: Не удалось проверить изменения расписания")
         return
 
     for group_name in new_schedule.keys():
         old_lessons = schedule_cache.get(group_name, [])
         new_lessons = new_schedule.get(group_name, [])
         
-        old_set = set(json.dumps(lesson, sort_keys=True) for lesson in old_lessons)
-        new_set = set(json.dumps(lesson, sort_keys=True) for lesson in new_lessons)
-        
-        added_lessons_json = new_set - old_set
-        removed_lessons_json = old_set - new_set
-        
-        if added_lessons_json or removed_lessons_json:
-            print(f"ЛОГ: Обнаружены изменения в расписании для группы {group_name}")
-            
-            change_message = f"🔄 <b>Обновление расписания для группы {group_name}</b>\n\n"
-            
-            if added_lessons_json:
-                change_message += "🟢 <b>Добавлено:</b>\n"
-                for lesson_json in added_lessons_json:
-                    lesson = json.loads(lesson_json)
-                    subject = lesson.get('subjectFull', lesson.get('subject', 'N/A'))
-                    date_str = ""
-                    if lesson.get('date'):
-                        lesson_date = parse_date(lesson['date'])
-                        if lesson_date:
-                            date_str = lesson_date.astimezone(YEKATERINBURG_TZ).strftime('%d.%m.%Y')
-                    change_message += f"- {date_str} | {subject}\n"
-            
-            if removed_lessons_json:
-                if added_lessons_json:
-                    change_message += "\n"
-                change_message += "🔴 <b>Удалено:</b>\n"
-                for lesson_json in removed_lessons_json:
-                    lesson = json.loads(lesson_json)
-                    subject = lesson.get('subjectFull', lesson.get('subject', 'N/A'))
-                    date_str = ""
-                    if lesson.get('date'):
-                        lesson_date = parse_date(lesson['date'])
-                        if lesson_date:
-                            date_str = lesson_date.astimezone(YEKATERINBURG_TZ).strftime('%d.%m.%Y')
-                    change_message += f"- {date_str} | {subject}\n"
+        if len(old_lessons) != len(new_lessons):
+            change_message = f"🔄 <b>Изменение расписания для {group_name}</b>\n"
+            change_message += f"📊 Было: {len(old_lessons)} занятий, Стало: {len(new_lessons)} занятий\n"
             
             users = get_db_connection().execute('SELECT user_id FROM users WHERE group_name = ?', (group_name,)).fetchall()
             for user in users:
                 try:
-                    await context.bot.send_message(
-                        user['user_id'],
-                        change_message,
-                        parse_mode='HTML'
-                    )
+                    await context.bot.send_message(user['user_id'], change_message, parse_mode='HTML')
                 except Exception as e:
                     print(f"ОШИБКА: Не удалось отправить уведомление пользователю {user['user_id']}: {e}")
 
@@ -546,17 +443,10 @@ async def send_daily_schedule(context: ContextTypes.DEFAULT_TYPE):
         if not lessons:
             continue
 
-        tomorrow_lessons = filter_tomorrow_lessons(lessons)
+        tomorrow_lessons = filter_lessons_by_date(lessons, (datetime.now(YEKATERINBURG_TZ) + timedelta(days=1)).date())
         
         if tomorrow_lessons:
-            schedule_text = format_schedule(tomorrow_lessons, f"📅 Расписание на завтра ({group_name})")
-            
-            homeworks = get_homeworks(group_name)
-            if homeworks:
-                homework_text = "\n\n📝 <b>Домашние задания:</b>\n"
-                for hw in homeworks[:3]:
-                    homework_text += f"• {hw['subject']}: {hw['task']} (до {hw['deadline']})\n"
-                schedule_text += homework_text
+            schedule_text = get_schedule('📅 Завтра', group_name)
             
             users = get_db_connection().execute('SELECT user_id FROM users WHERE group_name = ?', (group_name,)).fetchall()
             for user in users:
@@ -574,10 +464,10 @@ async def send_morning_schedule(context: ContextTypes.DEFAULT_TYPE):
         if not lessons:
             continue
 
-        today_lessons = filter_today_lessons(lessons)
+        today_lessons = filter_lessons_by_date(lessons, datetime.now(YEKATERINBURG_TZ).date())
         
         if today_lessons:
-            schedule_text = format_schedule(today_lessons, f"📅 Расписание на сегодня ({group_name})")
+            schedule_text = get_schedule('📅 Сегодня', group_name)
             
             users = get_db_connection().execute('SELECT user_id FROM users WHERE group_name = ?', (group_name,)).fetchall()
             for user in users:
@@ -589,8 +479,6 @@ async def send_morning_schedule(context: ContextTypes.DEFAULT_TYPE):
 async def check_next_lesson(context: ContextTypes.DEFAULT_TYPE):
     """Checks and sends notification about next lesson"""
     global schedule_cache, user_notification_cache
-    
-    print("ЛОГ: Проверка следующей пары...")
     
     now = datetime.now(YEKATERINBURG_TZ)
     today_date = now.date()
@@ -605,61 +493,51 @@ async def check_next_lesson(context: ContextTypes.DEFAULT_TYPE):
         if not lessons:
             continue
 
-        today_lessons = filter_today_lessons(lessons)
+        today_lessons = filter_lessons_by_date(lessons, today_date)
         
         if not today_lessons:
             continue
             
         for lesson in today_lessons:
             try:
-                lesson_number = lesson.get('lessonNumber', 0)
-                
-                # Use a combined key for notification cache to prevent duplicates
+                values = list(lesson.values())
+                if len(values) < 3:
+                    continue
+                    
+                lesson_number = values[2]
                 notification_key = f"{user_id}_{today_date}_{lesson_number}"
                 
-                # Check if we have already sent this notification today
                 if user_notification_cache.get(notification_key) is True:
                     continue
 
-                lesson_date = parse_date(lesson['date'])
+                lesson_date = parse_date(values[0])
                 if not lesson_date:
                     continue
                     
                 lesson_date_yekat = lesson_date.astimezone(YEKATERINBURG_TZ)
                 day_of_week_num = lesson_date_yekat.weekday()
-                
                 start_time_str, _ = get_lesson_time(lesson_number, day_of_week_num)
                 
                 start_time_naive = datetime.strptime(start_time_str, '%H:%M').time()
                 start_time_aware = datetime.combine(now.date(), start_time_naive).replace(tzinfo=YEKATERINBURG_TZ)
                 
                 if now + timedelta(minutes=5) >= start_time_aware and now < start_time_aware:
-                    subject = lesson.get('subjectFull', lesson.get('subject', 'N/A'))
-                    teacher = lesson.get('teacher', 'N/A')
-                    room = lesson.get('room', 'N/A')
-                    
-                    next_lesson_text = (
-                        f"📅 <b>Начало следующей пары через 5 минут ({group_name})</b>\n\n"
-                        f"    ⏰ {get_lesson_time(lesson_number, day_of_week_num)[0]}-{get_lesson_time(lesson_number, day_of_week_num)[1]} | {lesson_number} пара\n"
-                        f"    📚 {subject}\n"
-                        f"    👨‍🏫 {teacher}\n"
-                        f"    🚪 {room}\n"
-                    )
+                    lesson_text = format_lesson(lesson, False)
+                    next_lesson_text = f"📅 <b>Начало пары через 5 минут ({group_name})</b>\n\n{lesson_text}"
                     
                     try:
                         await context.bot.send_message(user_id, next_lesson_text, parse_mode='HTML')
                         user_notification_cache[notification_key] = True
                     except Exception as e:
-                        print(f"ОШИБКА: Не удалось отправить уведомление о следующей паре пользователю {user_id}: {e}")
+                        print(f"ОШИБКА: Не удалось отправить уведомление пользователю {user_id}: {e}")
 
             except Exception as e:
-                print(f"ОШИБКА: Не удалось обработать пару: {e}")
                 continue
 
-    # Clean up old notifications from the cache once a day
     if now.hour == 0 and now.minute == 0:
         user_notification_cache.clear()
-# -------------------- CORE BOT FUNCTIONS --------------------
+
+# -------------------- ОСТАЛЬНЫЕ ФУНКЦИИ БОТА (БЕЗ ИЗМЕНЕНИЙ) --------------------
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handler for the /start command"""
@@ -869,8 +747,6 @@ async def handle_simple_message(update: Update, context: ContextTypes.DEFAULT_TY
         await update.message.reply_text("Используй кнопки для навигации 👇")
         print(f"ЛОГ: Неизвестная команда от {user.first_name} (ID: {user_id}): '{text}'")
 
-# -------------------- SCHEDULE DISPLAY FUNCTIONS --------------------
-
 async def show_schedule_periods(update: Update, user_id: int):
     """Shows the schedule period selection"""
     keyboard = [
@@ -1022,8 +898,6 @@ async def ask_suggestion_details(update: Update, context: ContextTypes.DEFAULT_T
     print(f"ЛОГ: Запрошен ввод предложения от пользователя {update.effective_user.id}.")
     return AWAITING_SUGGESTION
 
-# --- UPDATED MESSAGE HANDLING FUNCTIONS IN DIALOGS ---
-
 async def handle_homework_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     user_data = get_user(user_id)
@@ -1145,8 +1019,6 @@ async def handle_suggestion_input(update: Update, context: ContextTypes.DEFAULT_
     print(f"ЛОГ: Пользователь {user_id} отправил предложение.")
     return ConversationHandler.END
 
-# --- NOTIFICATION SENDING LOGIC ---
-
 async def send_homework_to_all(bot, subject, task, deadline, group_name, added_by, photo_id=None):
     """Sends homework to all users in a group"""
     homework_text = (
@@ -1195,8 +1067,6 @@ async def send_sport_notification_to_all(bot, message, group_name, added_by, pho
                 await bot.send_message(user['user_id'], sport_text, parse_mode='HTML')
         except Exception as e:
             print(f"ОШИБКА: Не удалось отправить спортивное уведомление пользователю {user['user_id']}: {e}")
-
-# -------------------- INFO DISPLAY FUNCTIONS --------------------
 
 async def show_homework(update: Update, group_name: str):
     """Shows all homework for a group"""
@@ -1482,8 +1352,6 @@ async def handle_delete_callback(update: Update, context: ContextTypes.DEFAULT_T
     await show_main_menu(update, query.from_user.id)
     return ConversationHandler.END
 
-# -------------------- ROLE FIX FUNCTION --------------------
-
 async def handle_role_fix_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handles the role fix callback"""
     query = update.callback_query
@@ -1502,8 +1370,6 @@ async def handle_role_fix_callback(update: Update, context: ContextTypes.DEFAULT
     await query.edit_message_text("✅ Ваша роль была обновлена! Теперь у вас должны быть все права.")
     await show_main_menu(update, user_id)
 
-# -------------------- JOB QUEUE FUNCTIONS --------------------
-
 async def init_schedule_cache(application):
     """Initializes the schedule cache"""
     global schedule_cache, last_schedule_check
@@ -1512,8 +1378,6 @@ async def init_schedule_cache(application):
         schedule_cache = schedule_data
         last_schedule_check = datetime.now(YEKATERINBURG_TZ)
         print("ЛОГ: Кэш расписания инициализирован")
-
-# -------------------- MAIN FUNCTION --------------------
 
 def main():
     """Main function to run the bot"""
