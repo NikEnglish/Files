@@ -225,7 +225,9 @@ def fetch_schedule_data():
         resp.raise_for_status()
         html = resp.text
 
-        match = re.search(r"const scheduleData\s*=\s*(\{.*?\});", html, re.S)
+        # 🚀 Обновленное и более гибкое регулярное выражение для поиска JSON
+        # Оно ищет 'const scheduleData = {' и захватывает все до первой ';' после открывающей скобки
+        match = re.search(r"const\s+scheduleData\s*=\s*(\{.*?\});", html, re.S)
         if not match:
             print("ОШИБКА: Не удалось найти scheduleData на сайте.")
             return None
