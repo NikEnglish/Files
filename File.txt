@@ -223,6 +223,18 @@ SUBJECT_KEY = "gbeTv7Dy"           # Биология
 TEACHER_KEY = "5ZnFq6xT"           # Артемьева Людмила Владимировна
 ROOM_KEY = "T7wLN7sY"              # 219
 
+def is_valid_lesson_date(lesson):
+    """Checks if a lesson object has a valid date key and format."""
+    date_str = lesson.get(LESSON_DATE_KEY)
+    if not date_str:
+        return False
+    try:
+        # Пробуем преобразовать строку в дату/время
+        datetime.fromisoformat(date_str.replace('Z', '+00:00'))
+        return True
+    except (ValueError, TypeError):
+        return False
+
 def fetch_schedule_data():
     """Fetches schedule data from the website"""
     try:
@@ -247,23 +259,32 @@ def fetch_schedule_data():
         return None
 
 def filter_today_lessons(lessons):
-    """Filters lessons for today considering Yekaterinburg time"""
+    """Filters lessons for today considering Yekaterinburg time and ignores invalid dates"""
     today_yekat = datetime.now(YEKATERINBURG_TZ).date()
-    # Использование LESSON_DATE_KEY
-    return [lesson for lesson in lessons if lesson.get(LESSON_DATE_KEY) and datetime.fromisoformat(lesson[LESSON_DATE_KEY].replace('Z', '+00:00')).astimezone(YEKATERINBURG_TZ).date() == today_yekat]
+    return [
+        lesson for lesson in lessons 
+        if is_valid_lesson_date(lesson) and 
+        datetime.fromisoformat(lesson[LESSON_DATE_KEY].replace('Z', '+00:00')).astimezone(YEKATERINBURG_TZ).date() == today_yekat
+    ]
 
 def filter_tomorrow_lessons(lessons):
-    """Filters lessons for tomorrow considering Yekaterinburg time"""
+    """Filters lessons for tomorrow considering Yekaterinburg time and ignores invalid dates"""
     tomorrow_yekat = (datetime.now(YEKATERINBURG_TZ) + timedelta(days=1)).date()
-    # Использование LESSON_DATE_KEY
-    return [lesson for lesson in lessons if lesson.get(LESSON_DATE_KEY) and datetime.fromisoformat(lesson[LESSON_DATE_KEY].replace('Z', '+00:00')).astimezone(YEKATERINBURG_TZ).date() == tomorrow_yekat]
+    return [
+        lesson for lesson in lessons 
+        if is_valid_lesson_date(lesson) and 
+        datetime.fromisoformat(lesson[LESSON_DATE_KEY].replace('Z', '+00:00')).astimezone(YEKATERINBURG_TZ).date() == tomorrow_yekat
+    ]
 
 def filter_week_lessons(lessons):
-    """Filters lessons for the week considering Yekaterinburg time"""
+    """Filters lessons for the week considering Yekaterinburg time and ignores invalid dates"""
     today_yekat = datetime.now(YEKATERINBURG_TZ).date()
     week_end = today_yekat + timedelta(days=7)
-    # Использование LESSON_DATE_KEY
-    return [lesson for lesson in lessons if lesson.get(LESSON_DATE_KEY) and today_yekat <= datetime.fromisoformat(lesson[LESSON_DATE_KEY].replace('Z', '+00:00')).astimezone(YEKATERINBURG_TZ).date() <= week_end]
+    return [
+        lesson for lesson in lessons 
+        if is_valid_lesson_date(lesson) and 
+        today_yekat <= datetime.fromisoformat(lesson[LESSON_DATE_KEY].replace('Z', '+00:00')).astimezone(YEKATERINBURG_TZ).date() <= week_end
+    ]
 
 def get_lesson_time(lesson_number, day_of_week):
     """Returns the time of a lesson by its number, adjusted for Saturday"""
@@ -293,6 +314,11 @@ def format_schedule(lessons, title):
     result = [f"<b>{title}</b>\n"]
     current_date = None
     for lesson in lessons:
+        # Убедимся, что дата урока корректна перед форматированием
+        if not is_valid_lesson_date(lesson):
+            print(f"ОШИБКА: Пропущен урок с неверной датой: {lesson}")
+            continue
+            
         try:
             # Использование LESSON_DATE_KEY
             lesson_date_utc = datetime.fromisoformat(lesson[LESSON_DATE_KEY].replace('Z', '+00:00'))
@@ -319,6 +345,7 @@ def format_schedule(lessons, title):
             )
             result.append(lesson_text)
         except Exception as e:
+            # Логгирование ошибки, но продолжение работы
             print(f"ОШИБКА: Не удалось отформатировать пару: {e}")
             continue
     
@@ -360,6 +387,10 @@ def get_schedule(period, group_name):
         elif period == '📅 Неделя':
             filtered_lessons = filter_week_lessons(lessons)
             title = f"📅 Расписание на неделю ({group_name})"
+        elif period == '📅 Все расписание':
+            # Для "Все расписание" мы фильтруем только невалидные даты
+            filtered_lessons = [l for l in lessons if is_valid_lesson_date(l)]
+            title = f"📅 Все расписание ({group_name})"
         else:
             filtered_lessons = lessons
             title = f"📅 Все расписание ({group_name})"
@@ -405,7 +436,8 @@ async def check_schedule_changes(context: ContextTypes.DEFAULT_TYPE):
                 for lesson_json in added_lessons_json:
                     lesson = json.loads(lesson_json)
                     # Использование LESSON_DATE_KEY и SUBJECT_KEY
-                    change_message += f"- {lesson.get(LESSON_DATE_KEY)} | {lesson.get(SUBJECT_KEY)}\n" 
+                    date_info = lesson.get(LESSON_DATE_KEY) or 'Дата не указана'
+                    change_message += f"- {date_info} | {lesson.get(SUBJECT_KEY, 'N/A')}\n" 
             
             if removed_lessons_json:
                 if added_lessons_json:
@@ -414,7 +446,8 @@ async def check_schedule_changes(context: ContextTypes.DEFAULT_TYPE):
                 for lesson_json in removed_lessons_json:
                     lesson = json.loads(lesson_json)
                     # Использование LESSON_DATE_KEY и SUBJECT_KEY
-                    change_message += f"- {lesson.get(LESSON_DATE_KEY)} | {lesson.get(SUBJECT_KEY)}\n"
+                    date_info = lesson.get(LESSON_DATE_KEY) or 'Дата не указана'
+                    change_message += f"- {date_info} | {lesson.get(SUBJECT_KEY, 'N/A')}\n"
             
             users = get_db_connection().execute('SELECT user_id FROM users WHERE group_name = ?', (group_name,)).fetchall()
             for user in users:
