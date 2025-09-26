@@ -319,18 +319,35 @@ def format_schedule(lessons, title):
     if not lessons:
         return "✅ Нет занятий"
     
-    # ИСПРАВЛЕНИЕ: Сортировка по полю 'date' (которое теперь является UTC временем) и номеру пары
+    # Сортировка: Сначала по дате/времени (напрямую из lesson['date']), затем по номеру пары.
     lessons.sort(key=lambda x: (x.get('date', '2000-01-01T00:00:00Z'), x.get('lessonNumber', 0)))
     
     result = [f"<b>{title}</b>\n"]
     current_date = None
+    
     for lesson in lessons:
         try:
-            # Парсинг UTC времени, которое теперь в lesson['date']
-            lesson_date_utc = datetime.fromisoformat(lesson['date'].replace('Z', '+00:00'))
+            # 1. Проверка наличия данных
+            date_str_raw = lesson.get('date')
+            lesson_number = lesson.get('lessonNumber', 0)
+            
+            if not date_str_raw:
+                print(f"ОШИБКА: Пропущена пара без поля 'date'. Предмет: {lesson.get('subjectFull', 'N/A')}")
+                continue
+
+            # 2. Парсинг UTC времени с безопасной обработкой
+            try:
+                # Если в конце 'Z', то это UTC. fromisoformat() должна справиться.
+                lesson_date_utc = datetime.fromisoformat(date_str_raw)
+            except ValueError:
+                # Попробуем заменить 'Z' на '+00:00' для обратной совместимости, если возникла ошибка парсинга
+                lesson_date_utc = datetime.fromisoformat(date_str_raw.replace('Z', '+00:00'))
+
+            # 3. Перевод в Екатеринбургское время (+05:00)
             lesson_date_yekat = lesson_date_utc.astimezone(YEKATERINBURG_TZ)
             date_str = lesson_date_yekat.strftime('%d.%m.%Y')
             
+            # Форматирование заголовка дня
             if date_str != current_date:
                 current_date = date_str
                 day_names = ['Понедельник', 'Вторник', 'Среда', 'Четверг', 'Пятница', 'Суббота', 'Воскресенье']
@@ -338,8 +355,8 @@ def format_schedule(lessons, title):
                 day_of_week = day_names[day_of_week_num]
                 result.append(f"\n📅 <b>{date_str} ({day_of_week})</b>")
             
-            lesson_number = lesson.get('lessonNumber', 0)
-            # Используем номер пары и день недели для получения стандартного времени
+            # Получение стандартного времени пары
+            day_of_week_num = lesson_date_yekat.weekday()
             start_time, end_time = get_lesson_time(lesson_number, day_of_week_num) 
             
             lesson_text = (
@@ -349,8 +366,11 @@ def format_schedule(lessons, title):
                 f"    🚪 {lesson.get('room', 'N/A')}\n"
             )
             result.append(lesson_text)
+            
         except Exception as e:
-            print(f"ОШИБКА: Не удалось отформатировать пару: {e}")
+            # Логирование конкретной ошибки для отладки
+            print(f"КРИТИЧЕСКАЯ ОШИБКА ФОРМАТИРОВАНИЯ: {e} для пары: {lesson}")
+            result.append(f"❌ Ошибка форматирования пары: {lesson.get('subjectFull', 'N/A')} ({e})")
             continue
     
     result.append(f"\n📊 <b>Всего занятий:</b> {len(lessons)}")
