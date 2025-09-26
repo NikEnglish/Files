@@ -238,55 +238,24 @@ def fetch_schedule_data():
         print(f"ОШИБКА: Не удалось загрузить расписание: {e}")
         return None
 
-def normalize_lesson(lesson_new_format):
-    """Преобразует пару из нового формата в старый, понятный боту."""
-    try:
-        # Ключи из нового формата
-        start_time_utc_str = lesson_new_format.get("o7OUjsQh")
-        end_time_utc_str = lesson_new_format.get("d4UdBHV7")
-
-        if not start_time_utc_str:
-            return None # Пропускаем, если нет времени начала
-
-        # Конвертируем время в часовой пояс Екатеринбурга
-        start_time_utc = datetime.fromisoformat(start_time_utc_str.replace('Z', '+00:00'))
-        end_time_utc = datetime.fromisoformat(end_time_utc_str.replace('Z', '+00:00'))
-        
-        start_time_yekat = start_time_utc.astimezone(YEKATERINBURG_TZ)
-        end_time_yekat = end_time_utc.astimezone(YEKATERINBURG_TZ)
-
-        # Создаем словарь в "старом" формате, который понимает остальной код
-        normalized = {
-            # Ключ 'date' теперь хранит полную дату и время начала для фильтрации
-            'date': start_time_utc_str, 
-            'lessonNumber': lesson_new_format.get("M5YIzu1f"),
-            'subjectFull': lesson_new_format.get("gbeTv7Dy", "N/A"),
-            'teacher': lesson_new_format.get("5ZnFq6xT", "N/A"),
-            'room': lesson_new_format.get("T7wLN7sY", "N/A"),
-            # Добавляем отформатированное время для удобного вывода
-            'start_time': start_time_yekat.strftime('%H:%M'),
-            'end_time': end_time_yekat.strftime('%H:%M')
-        }
-        return normalized
-    except Exception as e:
-        print(f"ОШИБКА: Не удалось нормализовать пару: {e}, данные: {lesson_new_format}")
-        return None
-
 def filter_today_lessons(lessons):
     """Filters lessons for today considering Yekaterinburg time"""
     today_yekat = datetime.now(YEKATERINBURG_TZ).date()
-    return [lesson for lesson in lessons if lesson.get('date') and datetime.fromisoformat(lesson['date'].replace('Z', '+00:00')).astimezone(YEKATERINBURG_TZ).date() == today_yekat]
+    # Использование нового ключа для даты: 'UQuXyqBC'
+    return [lesson for lesson in lessons if lesson.get('UQuXyqBC') and datetime.fromisoformat(lesson['UQuXyqBC'].replace('Z', '+00:00')).astimezone(YEKATERINBURG_TZ).date() == today_yekat]
 
 def filter_tomorrow_lessons(lessons):
     """Filters lessons for tomorrow considering Yekaterinburg time"""
     tomorrow_yekat = (datetime.now(YEKATERINBURG_TZ) + timedelta(days=1)).date()
-    return [lesson for lesson in lessons if lesson.get('date') and datetime.fromisoformat(lesson['date'].replace('Z', '+00:00')).astimezone(YEKATERINBURG_TZ).date() == tomorrow_yekat]
+    # Использование нового ключа для даты: 'UQuXyqBC'
+    return [lesson for lesson in lessons if lesson.get('UQuXyqBC') and datetime.fromisoformat(lesson['UQuXyqBC'].replace('Z', '+00:00')).astimezone(YEKATERINBURG_TZ).date() == tomorrow_yekat]
 
 def filter_week_lessons(lessons):
     """Filters lessons for the week considering Yekaterinburg time"""
     today_yekat = datetime.now(YEKATERINBURG_TZ).date()
     week_end = today_yekat + timedelta(days=7)
-    return [lesson for lesson in lessons if lesson.get('date') and today_yekat <= datetime.fromisoformat(lesson['date'].replace('Z', '+00:00')).astimezone(YEKATERINBURG_TZ).date() <= week_end]
+    # Использование нового ключа для даты: 'UQuXyqBC'
+    return [lesson for lesson in lessons if lesson.get('UQuXyqBC') and today_yekat <= datetime.fromisoformat(lesson['UQuXyqBC'].replace('Z', '+00:00')).astimezone(YEKATERINBURG_TZ).date() <= week_end]
 
 def get_lesson_time(lesson_number, day_of_week):
     """Returns the time of a lesson by its number, adjusted for Saturday"""
@@ -310,13 +279,15 @@ def format_schedule(lessons, title):
     if not lessons:
         return "✅ Нет занятий"
     
-    lessons.sort(key=lambda x: x.get('date', ''))
+    # Использование новых ключей для сортировки: 'UQuXyqBC' (дата) и 'M5YIzu1f' (номер пары)
+    lessons.sort(key=lambda x: (x.get('UQuXyqBC', ''), x.get('M5YIzu1f', 0)))
     
     result = [f"<b>{title}</b>\n"]
     current_date = None
     for lesson in lessons:
         try:
-            lesson_date_utc = datetime.fromisoformat(lesson['date'].replace('Z', '+00:00'))
+            # Использование нового ключа для даты: lesson['UQuXyqBC']
+            lesson_date_utc = datetime.fromisoformat(lesson['UQuXyqBC'].replace('Z', '+00:00'))
             lesson_date_yekat = lesson_date_utc.astimezone(YEKATERINBURG_TZ)
             date_str = lesson_date_yekat.strftime('%d.%m.%Y')
             
@@ -327,16 +298,16 @@ def format_schedule(lessons, title):
                 day_of_week = day_names[day_of_week_num]
                 result.append(f"\n📅 <b>{date_str} ({day_of_week})</b>")
             
-            lesson_number = lesson.get('lessonNumber', 0)
-            
-            start_time = lesson.get('start_time', '❓')
-            end_time = lesson.get('end_time', '❓')
+            # Использование нового ключа для номера пары: 'M5YIzu1f'
+            lesson_number = lesson.get('M5YIzu1f', 0)
+            start_time, end_time = get_lesson_time(lesson_number, day_of_week_num)
             
             lesson_text = (
                 f"    ⏰ {start_time}-{end_time} | {lesson_number} пара\n"
-                f"    📚 {lesson.get('subjectFull', 'N/A')}\n"
-                f"    👨‍🏫 {lesson.get('teacher', 'N/A')}\n"
-                f"    🚪 {lesson.get('room', 'N/A')}\n"
+                # Использование новых ключей для предмета, преподавателя и кабинета
+                f"    📚 {lesson.get('06dwwAd0', 'N/A')}\n"  # '06dwwAd0' - Предмет
+                f"    👨‍🏫 {lesson.get('5ZnFq6xT', 'N/A')}\n"  # '5ZnFq6xT' - Преподаватель
+                f"    🚪 {lesson.get('T7wLN7sY', 'N/A')}\n"  # 'T7wLN7sY' - Кабинет
             )
             result.append(lesson_text)
         except Exception as e:
@@ -353,23 +324,17 @@ def get_schedule(period, group_name):
         
         now = datetime.now(YEKATERINBURG_TZ)
         if last_schedule_check is None or (now - last_schedule_check).total_seconds() > 3600:
-            schedule_data_raw = fetch_schedule_data()
-            if schedule_data_raw:
-                normalized_schedule = {}
-                for group, lessons in schedule_data_raw.items():
-                    normalized_lessons = [normalize_lesson(l) for l in lessons]
-                    normalized_schedule[group] = [l for l in normalized_lessons if l is not None]
-                
-                schedule_cache = normalized_schedule
+            schedule_data = fetch_schedule_data()
+            if schedule_data:
+                schedule_cache = schedule_data
                 last_schedule_check = now
-                print("ЛОГ: Расписание обновлено из интернета и нормализовано")
+                print("ЛОГ: Расписание обновлено из интернета")
             else:
                 print("ЛОГ: Не удалось обновить расписание, используем кэш")
         else:
+            schedule_data = schedule_cache
             print("ЛОГ: Используем кэшированное расписание")
         
-        schedule_data = schedule_cache
-
         if not schedule_data:
             return "❌ Не удалось загрузить расписание"
 
@@ -405,16 +370,11 @@ async def check_schedule_changes(context: ContextTypes.DEFAULT_TYPE):
     global schedule_cache, last_schedule_check
     
     print("ЛОГ: Проверка изменений в расписании...")
-    new_schedule_raw = fetch_schedule_data()
+    new_schedule = fetch_schedule_data()
     
-    if not new_schedule_raw:
+    if not new_schedule:
         print("ЛОГ: Не удалось проверить изменения расписания")
         return
-
-    new_schedule = {}
-    for group, lessons in new_schedule_raw.items():
-        normalized_lessons = [normalize_lesson(l) for l in lessons]
-        new_schedule[group] = [l for l in normalized_lessons if l is not None]
 
     for group_name in new_schedule.keys():
         old_lessons = schedule_cache.get(group_name, [])
@@ -435,8 +395,8 @@ async def check_schedule_changes(context: ContextTypes.DEFAULT_TYPE):
                 change_message += "🟢 <b>Добавлено:</b>\n"
                 for lesson_json in added_lessons_json:
                     lesson = json.loads(lesson_json)
-                    date_str = datetime.fromisoformat(lesson.get('date').replace('Z', '+00:00')).astimezone(YEKATERINBURG_TZ).strftime('%d.%m %H:%M')
-                    change_message += f"- {date_str} | {lesson.get('subjectFull')}\n"
+                    # Использование новых ключей для вывода: 'UQuXyqBC' (дата) и '06dwwAd0' (предмет)
+                    change_message += f"- {lesson.get('UQuXyqBC')} | {lesson.get('06dwwAd0')}\n"
             
             if removed_lessons_json:
                 if added_lessons_json:
@@ -444,8 +404,8 @@ async def check_schedule_changes(context: ContextTypes.DEFAULT_TYPE):
                 change_message += "🔴 <b>Удалено:</b>\n"
                 for lesson_json in removed_lessons_json:
                     lesson = json.loads(lesson_json)
-                    date_str = datetime.fromisoformat(lesson.get('date').replace('Z', '+00:00')).astimezone(YEKATERINBURG_TZ).strftime('%d.%m %H:%M')
-                    change_message += f"- {date_str} | {lesson.get('subjectFull')}\n"
+                    # Использование новых ключей для вывода: 'UQuXyqBC' (дата) и '06dwwAd0' (предмет)
+                    change_message += f"- {lesson.get('UQuXyqBC')} | {lesson.get('06dwwAd0')}\n"
             
             users = get_db_connection().execute('SELECT user_id FROM users WHERE group_name = ?', (group_name,)).fetchall()
             for user in users:
@@ -465,8 +425,7 @@ async def send_daily_schedule(context: ContextTypes.DEFAULT_TYPE):
     """Sends daily schedule at 19:00"""
     print("ЛОГ: Отправка ежедневного расписания...")
     
-    all_groups = list(schedule_cache.keys())
-    for group_name in all_groups:
+    for group_name in schedule_cache.keys():
         lessons = schedule_cache.get(group_name)
         if not lessons:
             continue
@@ -494,8 +453,7 @@ async def send_morning_schedule(context: ContextTypes.DEFAULT_TYPE):
     """Sends morning schedule at 07:00"""
     print("ЛОГ: Отправка утреннего расписания...")
     
-    all_groups = list(schedule_cache.keys())
-    for group_name in all_groups:
+    for group_name in schedule_cache.keys():
         lessons = schedule_cache.get(group_name)
         if not lessons:
             continue
@@ -538,24 +496,30 @@ async def check_next_lesson(context: ContextTypes.DEFAULT_TYPE):
             
         for i, lesson in enumerate(today_lessons):
             try:
-                lesson_number = lesson.get('lessonNumber', 0)
+                # Использование нового ключа для номера пары: 'M5YIzu1f'
+                lesson_number = lesson.get('M5YIzu1f', 0)
+                
+                # Use a combined key for notification cache to prevent duplicates
                 notification_key = f"{user_id}_{today_date}_{lesson_number}"
                 
+                # Check if we have already sent this notification today
                 if user_notification_cache.get(notification_key) is True:
                     continue
 
-                start_time_aware = datetime.fromisoformat(lesson['date'].replace('Z', '+00:00')).astimezone(YEKATERINBURG_TZ)
+                day_of_week_num = now.weekday()
+                start_time_str, _ = get_lesson_time(lesson_number, day_of_week_num)
+                
+                start_time_naive = datetime.strptime(start_time_str, '%H:%M').time()
+                start_time_aware = datetime.combine(now.date(), start_time_naive).replace(tzinfo=YEKATERINBURG_TZ)
                 
                 if now + timedelta(minutes=5) >= start_time_aware and now < start_time_aware:
-                    start_time = lesson.get('start_time', '❓')
-                    end_time = lesson.get('end_time', '❓')
-
                     next_lesson_text = (
                         f"📅 <b>Начало следующей пары через 5 минут ({group_name})</b>\n\n"
-                        f"    ⏰ {start_time}-{end_time} | {lesson_number} пара\n"
-                        f"    📚 {lesson.get('subjectFull', 'N/A')}\n"
-                        f"    👨‍🏫 {lesson.get('teacher', 'N/A')}\n"
-                        f"    🚪 {lesson.get('room', 'N/A')}\n"
+                        f"    ⏰ {get_lesson_time(lesson_number, day_of_week_num)[0]}-{get_lesson_time(lesson_number, day_of_week_num)[1]} | {lesson_number} пара\n"
+                        # Использование новых ключей
+                        f"    📚 {lesson.get('06dwwAd0', 'N/A')}\n"
+                        f"    👨‍🏫 {lesson.get('5ZnFq6xT', 'N/A')}\n"
+                        f"    🚪 {lesson.get('T7wLN7sY', 'N/A')}\n"
                     )
                     
                     try:
@@ -568,8 +532,8 @@ async def check_next_lesson(context: ContextTypes.DEFAULT_TYPE):
                 print(f"ОШИБКА: Не удалось обработать пару: {e}")
                 continue
 
-    if now.hour == 0 and now.minute < 2:
-        print("ЛОГ: Очистка кэша уведомлений...")
+    # Clean up old notifications from the cache once a day
+    if now.hour == 0 and now.minute == 0:
         user_notification_cache.clear()
 
 # -------------------- CORE BOT FUNCTIONS --------------------
@@ -1420,15 +1384,11 @@ async def handle_role_fix_callback(update: Update, context: ContextTypes.DEFAULT
 async def init_schedule_cache(application):
     """Initializes the schedule cache"""
     global schedule_cache, last_schedule_check
-    schedule_data_raw = fetch_schedule_data()
-    if schedule_data_raw:
-        normalized_schedule = {}
-        for group, lessons in schedule_data_raw.items():
-            normalized_lessons = [normalize_lesson(l) for l in lessons]
-            normalized_schedule[group] = [l for l in normalized_lessons if l is not None]
-        schedule_cache = normalized_schedule
+    schedule_data = fetch_schedule_data()
+    if schedule_data:
+        schedule_cache = schedule_data
         last_schedule_check = datetime.now(YEKATERINBURG_TZ)
-        print("ЛОГ: Кэш расписания инициализирован и нормализован")
+        print("ЛОГ: Кэш расписания инициализирован")
 
 # -------------------- MAIN FUNCTION --------------------
 
@@ -1486,4 +1446,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
