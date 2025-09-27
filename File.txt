@@ -243,22 +243,35 @@ def fetch_schedule_data():
     """Fetches schedule data from the website"""
     try:
         url = "https://pmk-online.ru/students/schedule/"
-        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
-        resp = requests.get(url, headers=headers, timeout=10)
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+        }
+        
+        resp = requests.get(url, headers=headers, timeout=15)
         resp.raise_for_status()
         html = resp.text
 
-        match = re.search(r"const scheduleData\s*=\s*(\{.*?\});", html, re.S)
-        if not match:
-            print("ОШИБКА: Не удалось найти scheduleData на сайте.")
-            return None
-
-        schedule_raw = match.group(1)
-        schedule_json_str = schedule_raw.replace(";", "")
-        return json.loads(schedule_json_str)
+        # Ищем scheduleData разными способами
+        patterns = [
+            r"const scheduleData\s*=\s*(\{.*?\});",
+            r"var scheduleData\s*=\s*(\{.*?\});",
+            r"scheduleData\s*=\s*(\{.*?\});",
+        ]
+        
+        for pattern in patterns:
+            match = re.search(pattern, html, re.S)
+            if match:
+                schedule_raw = match.group(1)
+                # Чистим строку
+                schedule_json_str = schedule_raw.strip().rstrip(';')
+                return json.loads(schedule_json_str)
+        
+        print("❌ Не удалось найти scheduleData на сайте.")
+        return None
     
     except Exception as e:
-        print(f"ОШИБКА: Не удалось загрузить расписание: {e}")
+        print(f"❌ Ошибка загрузки расписания: {e}")
         return None
 
 def filter_lessons_by_date(lessons, target_date):
@@ -295,17 +308,17 @@ def format_lesson(lesson, show_date=True):
         return "❌ Ошибка формата занятия"
     
     try:
-        # Распределяем значения по порядку
-        date_str = values[0]
-        group = values[1]  # Не используем, т.к. знаем группу
-        lesson_number = values[2]
-        lesson_type = values[3]
-        subgroup = values[4]
-        subject_short = values[5]
-        subject_full = values[6]
-        faculty = values[7]
-        room = values[8]
-        teacher = values[9]
+        # Берем значения по порядку (ключи нас не интересуют)
+        date_str = values[0]          # Дата занятия
+        group = values[1]             # Группа (не используем)
+        lesson_number = values[2]     # Номер пары
+        lesson_type = values[3]       # Тип занятия
+        subgroup = values[4]          # Подгруппа
+        subject_short = values[5]     # Короткое название предмета
+        subject_full = values[6]      # Полное название предмета
+        faculty = values[7]           # Факультет
+        room = values[8]              # Аудитория
+        teacher = values[9]           # Преподаватель
         
         lesson_date = parse_date(date_str)
         if not lesson_date:
@@ -321,10 +334,10 @@ def format_lesson(lesson, show_date=True):
             date_formatted = lesson_date_yekat.strftime('%d.%m.%Y')
             result = f"📅 {date_formatted} ({day_names[day_of_week_num]})\n"
         
-        result += f"⏰ {start_time}-{end_time} | {lesson_number} пара\n"
-        result += f"📚 {subject_full if subject_full != subject_short else subject_short}\n"
-        result += f"👨‍🏫 {teacher}\n"
-        result += f"🚪 {room}"
+        result += f"    ⏰ {start_time}-{end_time} | {lesson_number} пара\n"
+        result += f"    📚 {subject_full if subject_full != subject_short else subject_short}\n"
+        result += f"    👨‍🏫 {teacher}\n"
+        result += f"    🚪 {room}"
         
         if subgroup != 0:
             result += f" | Подгруппа {subgroup}"
@@ -392,9 +405,12 @@ def get_schedule(period, group_name):
                     lesson_date_yekat = lesson_date.astimezone(YEKATERINBURG_TZ)
                     date_str = lesson_date_yekat.strftime('%d.%m.%Y')
                     
+                    # Показываем дату только если она изменилась
                     show_date = date_str != current_date
                     if show_date:
                         current_date = date_str
+                        if len(result) > 1:  # Добавляем пустую строку между днями
+                            result.append("")
                     
                     lesson_text = format_lesson(lesson, show_date)
                     result.append(lesson_text + "\n")
