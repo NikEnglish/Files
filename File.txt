@@ -217,24 +217,48 @@ def get_all_sport_notifications():
 # -------------------- SCHEDULE FUNCTIONS --------------------
 
 def fetch_schedule_data():
-    """Fetches schedule data from the website"""
+    """
+    Fetches schedule data from the website using multiple regex patterns 
+    for robustness and converts it into a more readable dictionary format.
+    """
     try:
         url = "https://pmk-online.ru/students/schedule/"
-        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
-        resp = requests.get(url, headers=headers, timeout=10)
+        
+        # Используем стандартный User-Agent по умолчанию (не передаем заголовки)
+        resp = requests.get(url, timeout=10)
         resp.raise_for_status()
         html = resp.text
 
-        match = re.search(r"const scheduleData\s*=\s*(\{.*?\});", html, re.S)
-        if not match:
-            print("ОШИБКА: Не удалось найти scheduleData на сайте.")
+        # ------------------- РОБУСТНЫЕ ПАТТЕРНЫ REGEX -------------------
+        patterns = [
+            # 1. Самый распространенный формат: const/var scheduleData = {...};
+            r'(?:const|var)\s+scheduleData\s*=\s*(\{[\s\S]*?\});',
+            # 2. Формат без const/var, но с точкой с запятой
+            r'scheduleData\s*=\s*(\{[\s\S]*?\});',
+            # 3. Формат с const/var, но без точки с запятой (если ее забыли/убрали)
+            r'(?:const|var)\s+scheduleData\s*=\s*(\{[\s\S]*?\})',
+            # 4. Самый широкий формат: scheduleData = {...} (без ; и без ключевых слов)
+            r'scheduleData\s*=\s*(\{[\s\S]*?\})'
+        ]
+        
+        schedule_raw = None
+        for pattern in patterns:
+            # re.DOTALL (re.S) позволяет . совпадать с символами новой строки
+            match = re.search(pattern, html, re.DOTALL)
+            if match:
+                schedule_raw = match.group(1)
+                print(f"ЛОГ: scheduleData успешно найдена с помощью паттерна: {pattern}")
+                break
+        
+        if not schedule_raw:
+            print("ОШИБКА: Не удалось найти scheduleData на сайте после всех попыток.")
             return None
 
-        schedule_raw = match.group(1)
-        schedule_json_str = schedule_raw.replace(";", "")
+        # Очистка извлеченного строкового JSON от возможных лишних пробелов и точки с запятой
+        schedule_json_str = schedule_raw.strip().rstrip(';').strip()
         raw_data = json.loads(schedule_json_str)
         
-        # Конвертируем в новый формат с понятными ключами
+        # Конвертируем в новый формат с понятными ключами (как в вашем исходном коде)
         converted_data = {}
         
         for group_name, lessons in raw_data.items():
@@ -245,20 +269,20 @@ def fetch_schedule_data():
                 values = list(lesson.values())
                 
                 converted_lesson = {
-                    'date': values[0],  # UQuXyqBC - дата создания
-                    'group': values[1],  # cQCBWqKn - группа
-                    'lessonNumber': values[2],  # M5YIzu1f - номер пары
-                    'type': values[3],  # fMCy5E03 - тип (Занятие)
-                    'something': values[4],  # HVp2LJzj - неизвестно (обычно 0)
-                    'subject': values[5],  # 06dwwAd0 - предмет (короткое название)
-                    'subjectFull': values[6],  # gbeTv7Dy - предмет (полное название)
-                    'department': values[7],  # cyQXN4uo - отделение (ПМК)
-                    'room': values[8],  # T7wLN7sY - аудитория
-                    'teacher': values[9],  # 5ZnFq6xT - преподаватель
-                    'teacherId': values[10],  # 7ogfRV0t - ID преподавателя
-                    'week': values[11],  # EALV5nW1 - неделя
-                    'startTime': values[12],  # o7OUjsQh - время начала
-                    'endTime': values[13]  # d4UdBHV7 - время окончания
+                    'date': values[0],  
+                    'group': values[1],  
+                    'lessonNumber': values[2],  
+                    'type': values[3],  
+                    'something': values[4],  
+                    'subject': values[5],  
+                    'subjectFull': values[6],  
+                    'department': values[7],  
+                    'room': values[8],  
+                    'teacher': values[9],  
+                    'teacherId': values[10],  
+                    'week': values[11],  
+                    'startTime': values[12],  
+                    'endTime': values[13]  
                 }
                 converted_lessons.append(converted_lesson)
             
@@ -266,8 +290,14 @@ def fetch_schedule_data():
         
         return converted_data
     
+    except requests.exceptions.RequestException as e:
+        print(f"ОШИБКА: Ошибка HTTP-запроса при загрузке расписания: {e}")
+        return None
+    except json.JSONDecodeError as e:
+        print(f"ОШИБКА: Не удалось декодировать JSON из извлеченных данных: {e}")
+        return None
     except Exception as e:
-        print(f"ОШИБКА: Не удалось загрузить расписание: {e}")
+        print(f"ОШИБКА: Непредвиденная ошибка при загрузке расписания: {e}")
         return None
 
 def filter_today_lessons(lessons):
