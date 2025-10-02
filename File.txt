@@ -53,62 +53,31 @@ user_media_collections = {}
 
 # -------------------- UPDATED CALL SCHEDULES --------------------
 
-# Regular schedule (Monday-Friday)
 # Regular schedule (Monday-Friday) - 6 пар по 2 части
 REGULAR_CALL_SCHEDULE = {
     1: {"start": "8:30", "end": "9:15", "type": "first_half"},
     "break1": {"start": "9:15", "end": "9:20", "duration": 5},
-    "1_second": {"start": "9:20", "end": "10:05", "type": "second_half"},
+    1: {"start": "9:20", "end": "10:05", "type": "second_half"},  # Та же пара №1
     "break2": {"start": "10:05", "end": "10:15", "duration": 10},
     2: {"start": "10:15", "end": "11:00", "type": "first_half"},
     "break3": {"start": "11:00", "end": "11:05", "duration": 5},
-    "2_second": {"start": "11:05", "end": "11:50", "type": "second_half"},
+    2: {"start": "11:05", "end": "11:50", "type": "second_half"},  # Та же пара №2
     "break4": {"start": "11:50", "end": "12:40", "duration": 50},
     3: {"start": "12:40", "end": "13:25", "type": "first_half"},
     "break5": {"start": "13:25", "end": "13:30", "duration": 5},
-    "3_second": {"start": "13:30", "end": "14:15", "type": "second_half"},
+    3: {"start": "13:30", "end": "14:15", "type": "second_half"},  # Та же пара №3
     "break6": {"start": "14:15", "end": "14:25", "duration": 10},
     4: {"start": "14:25", "end": "15:10", "type": "first_half"},
     "break7": {"start": "15:10", "end": "15:15", "duration": 5},
-    "4_second": {"start": "15:15", "end": "16:00", "type": "second_half"},
+    4: {"start": "15:15", "end": "16:00", "type": "second_half"},  # Та же пара №4
     "break8": {"start": "16:00", "end": "16:10", "duration": 10},
     5: {"start": "16:10", "end": "16:55", "type": "first_half"},
     "break9": {"start": "16:55", "end": "17:00", "duration": 5},
-    "5_second": {"start": "17:00", "end": "17:45", "type": "second_half"},
+    5: {"start": "17:00", "end": "17:45", "type": "second_half"},  # Та же пара №5
     "break10": {"start": "17:45", "end": "17:55", "duration": 10},
     6: {"start": "17:55", "end": "18:40", "type": "first_half"},
     "break11": {"start": "18:40", "end": "18:45", "duration": 5},
-    "6_second": {"start": "18:45", "end": "19:30", "type": "second_half"}
-}
-
-# Saturday schedule - 6 пар (можно оставить как есть или настроить аналогично)
-SATURDAY_CALL_SCHEDULE = {
-    1: {"start": "8:30", "end": "9:45"},
-    "break1": {"start": "9:45", "end": "9:55", "duration": 10},
-    2: {"start": "9:55", "end": "11:10"},
-    "break2": {"start": "11:10", "end": "11:20", "duration": 10},
-    3: {"start": "11:20", "end": "12:40"},
-    "break3": {"start": "12:40", "end": "13:20", "duration": 40},
-    4: {"start": "13:20", "end": "14:35"},
-    "break4": {"start": "14:35", "end": "14:45", "duration": 10},
-    5: {"start": "14:45", "end": "16:00"},
-    "break5": {"start": "16:00", "end": "16:10", "duration": 10},
-    6: {"start": "16:10", "end": "17:25"}
-}
-
-# Short day schedule - 6 пар (можно оставить как есть или настроить аналогично)
-SHORT_DAY_CALL_SCHEDULE = {
-    1: {"start": "8:30", "end": "9:30"},
-    "break1": {"start": "9:30", "end": "9:40", "duration": 10},
-    2: {"start": "9:40", "end": "10:40"},
-    "break2": {"start": "10:40", "end": "10:50", "duration": 10},
-    3: {"start": "10:50", "end": "11:50"},
-    "break3": {"start": "11:50", "end": "12:30", "duration": 40},
-    4: {"start": "12:30", "end": "13:30"},
-    "break4": {"start": "13:30", "end": "13:40", "duration": 10},
-    5: {"start": "13:40", "end": "14:40"},
-    "break5": {"start": "14:40", "end": "14:50", "duration": 10},
-    6: {"start": "14:50", "end": "15:50"}
+    6: {"start": "18:45", "end": "19:30", "type": "second_half"}   # Та же пара №6
 }
 
 # -------------------- DATABASE FUNCTIONS --------------------
