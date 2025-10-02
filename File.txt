@@ -54,32 +54,32 @@ user_media_collections = {}
 # -------------------- UPDATED CALL SCHEDULES --------------------
 
 # Regular schedule (Monday-Friday) - 6 пар по 2 части
+# Regular schedule (Monday-Friday) - 6 пар по 2 части
 REGULAR_CALL_SCHEDULE = {
     1: {"start": "8:30", "end": "9:15", "type": "first_half"},
     "break1": {"start": "9:15", "end": "9:20", "duration": 5},
-    "1_second": {"start": "9:20", "end": "10:05", "type": "second_half"},
+    1: {"start": "9:20", "end": "10:05", "type": "second_half"},
     "break2": {"start": "10:05", "end": "10:15", "duration": 10},
     2: {"start": "10:15", "end": "11:00", "type": "first_half"},
     "break3": {"start": "11:00", "end": "11:05", "duration": 5},
-    "2_second": {"start": "11:05", "end": "11:50", "type": "second_half"},
+    2: {"start": "11:05", "end": "11:50", "type": "second_half"},
     "break4": {"start": "11:50", "end": "12:40", "duration": 50},
     3: {"start": "12:40", "end": "13:25", "type": "first_half"},
     "break5": {"start": "13:25", "end": "13:30", "duration": 5},
-    "3_second": {"start": "13:30", "end": "14:15", "type": "second_half"},
+    3: {"start": "13:30", "end": "14:15", "type": "second_half"},
     "break6": {"start": "14:15", "end": "14:25", "duration": 10},
     4: {"start": "14:25", "end": "15:10", "type": "first_half"},
     "break7": {"start": "15:10", "end": "15:15", "duration": 5},
-    "4_second": {"start": "15:15", "end": "16:00", "type": "second_half"},
+    4: {"start": "15:15", "end": "16:00", "type": "second_half"},
     "break8": {"start": "16:00", "end": "16:10", "duration": 10},
     5: {"start": "16:10", "end": "16:55", "type": "first_half"},
     "break9": {"start": "16:55", "end": "17:00", "duration": 5},
-    "5_second": {"start": "17:00", "end": "17:45", "type": "second_half"},
+    5: {"start": "17:00", "end": "17:45", "type": "second_half"},
     "break10": {"start": "17:45", "end": "17:55", "duration": 10},
     6: {"start": "17:55", "end": "18:40", "type": "first_half"},
     "break11": {"start": "18:40", "end": "18:45", "duration": 5},
-    "6_second": {"start": "18:45", "end": "19:30", "type": "second_half"}
+    6: {"start": "18:45", "end": "19:30", "type": "second_half"}
 }
-
 # Saturday schedule - 6 пар (можно оставить как есть или настроить аналогично)
 SATURDAY_CALL_SCHEDULE = {
     1: {"start": "8:30", "end": "9:45"},
@@ -1467,41 +1467,29 @@ async def send_morning_schedule(context: ContextTypes.DEFAULT_TYPE):
 
 # -------------------- UPDATED CALL SCHEDULE FUNCTIONS --------------------
 
-async def show_call_schedule(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Shows the appropriate call schedule based on day of week"""
-    try:
-        now = datetime.now(YEKATERINBURG_TZ)
-        day_of_week = now.weekday()  # 0=Monday, 6=Sunday
-        
-        if day_of_week == 5:  # Saturday
-            schedule_text = format_call_schedule(SATURDAY_CALL_SCHEDULE, "Суббота")
-        elif day_of_week == 6:  # Sunday
-            schedule_text = "🔔 <b>Воскресенье - выходной день</b>"
-        else:  # Monday-Friday
-            schedule_text = format_call_schedule(REGULAR_CALL_SCHEDULE, "Понедельник-Пятница")
-        
-        await update.message.reply_text(schedule_text, parse_mode='HTML')
-    except Exception as e:
-        print(f"ОШИБКА: Ошибка в show_call_schedule: {e}")
-
 def format_call_schedule(schedule, day_type):
     """Formats call schedule for display"""
     result = [f"🔔 <b>Расписание звонков ({day_type})</b>\n\n"]
     
+    # Создаем список всех элементов в правильном порядке
+    items = []
     for key, value in schedule.items():
-        if isinstance(key, int):  # Lesson
+        if isinstance(key, int):
+            items.append(('lesson', key, value))
+        elif key.startswith('break'):
+            items.append(('break', key, value))
+    
+    # Сортируем по ключам чтобы сохранить порядок
+    items.sort(key=lambda x: (0 if x[0] == 'lesson' else 1, x[1]))
+    
+    for item_type, key, value in items:
+        if item_type == 'lesson':
             if 'type' in value:
-                if value['type'] == 'first_half':
-                    lesson_type = " (1-я часть)"
-                else:
-                    lesson_type = " (2-я часть)"
+                lesson_type = " (1-я часть)" if value['type'] == 'first_half' else " (2-я часть)"
             else:
                 lesson_type = ""
             result.append(f"{key} пара{lesson_type}: {value['start']} - {value['end']}")
-        elif key.endswith('_second'):  # Second part of lesson
-            # Это вторая часть пары, уже обработана в основном цикле
-            continue
-        else:  # Break
+        else:  # break
             if 'duration' in value:
                 result.append(f"🕓 Перемена: {value['start']} - {value['end']} ({value['duration']} мин)")
             else:
