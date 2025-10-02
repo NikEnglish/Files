@@ -52,35 +52,34 @@ BLOCK_DURATIONS = [600, 1800, 3600, 7200, 36000, 180000]
 user_media_collections = {}
 
 # -------------------- UPDATED CALL SCHEDULES --------------------
+# Regular schedule (Monday-Friday) - 6 пар по 2 части
+REGULAR_CALL_SCHEDULE = [
+    {"type": "lesson", "number": 1, "part": 1, "start": "8:30", "end": "9:15"},
+    {"type": "break", "start": "9:15", "end": "9:20", "duration": 5},
+    {"type": "lesson", "number": 1, "part": 2, "start": "9:20", "end": "10:05"},
+    {"type": "break", "start": "10:05", "end": "10:15", "duration": 10},
+    {"type": "lesson", "number": 2, "part": 1, "start": "10:15", "end": "11:00"},
+    {"type": "break", "start": "11:00", "end": "11:05", "duration": 5},
+    {"type": "lesson", "number": 2, "part": 2, "start": "11:05", "end": "11:50"},
+    {"type": "break", "start": "11:50", "end": "12:40", "duration": 50},
+    {"type": "lesson", "number": 3, "part": 1, "start": "12:40", "end": "13:25"},
+    {"type": "break", "start": "13:25", "end": "13:30", "duration": 5},
+    {"type": "lesson", "number": 3, "part": 2, "start": "13:30", "end": "14:15"},
+    {"type": "break", "start": "14:15", "end": "14:25", "duration": 10},
+    {"type": "lesson", "number": 4, "part": 1, "start": "14:25", "end": "15:10"},
+    {"type": "break", "start": "15:10", "end": "15:15", "duration": 5},
+    {"type": "lesson", "number": 4, "part": 2, "start": "15:15", "end": "16:00"},
+    {"type": "break", "start": "16:00", "end": "16:10", "duration": 10},
+    {"type": "lesson", "number": 5, "part": 1, "start": "16:10", "end": "16:55"},
+    {"type": "break", "start": "16:55", "end": "17:00", "duration": 5},
+    {"type": "lesson", "number": 5, "part": 2, "start": "17:00", "end": "17:45"},
+    {"type": "break", "start": "17:45", "end": "17:55", "duration": 10},
+    {"type": "lesson", "number": 6, "part": 1, "start": "17:55", "end": "18:40"},
+    {"type": "break", "start": "18:40", "end": "18:45", "duration": 5},
+    {"type": "lesson", "number": 6, "part": 2, "start": "18:45", "end": "19:30"}
+]
 
-# Regular schedule (Monday-Friday) - 6 пар по 2 части
-# Regular schedule (Monday-Friday) - 6 пар по 2 части
-REGULAR_CALL_SCHEDULE = {
-    1: {"start": "8:30", "end": "9:15", "type": "first_half"},
-    "break1": {"start": "9:15", "end": "9:20", "duration": 5},
-    1: {"start": "9:20", "end": "10:05", "type": "second_half"},
-    "break2": {"start": "10:05", "end": "10:15", "duration": 10},
-    2: {"start": "10:15", "end": "11:00", "type": "first_half"},
-    "break3": {"start": "11:00", "end": "11:05", "duration": 5},
-    2: {"start": "11:05", "end": "11:50", "type": "second_half"},
-    "break4": {"start": "11:50", "end": "12:40", "duration": 50},
-    3: {"start": "12:40", "end": "13:25", "type": "first_half"},
-    "break5": {"start": "13:25", "end": "13:30", "duration": 5},
-    3: {"start": "13:30", "end": "14:15", "type": "second_half"},
-    "break6": {"start": "14:15", "end": "14:25", "duration": 10},
-    4: {"start": "14:25", "end": "15:10", "type": "first_half"},
-    "break7": {"start": "15:10", "end": "15:15", "duration": 5},
-    4: {"start": "15:15", "end": "16:00", "type": "second_half"},
-    "break8": {"start": "16:00", "end": "16:10", "duration": 10},
-    5: {"start": "16:10", "end": "16:55", "type": "first_half"},
-    "break9": {"start": "16:55", "end": "17:00", "duration": 5},
-    5: {"start": "17:00", "end": "17:45", "type": "second_half"},
-    "break10": {"start": "17:45", "end": "17:55", "duration": 10},
-    6: {"start": "17:55", "end": "18:40", "type": "first_half"},
-    "break11": {"start": "18:40", "end": "18:45", "duration": 5},
-    6: {"start": "18:45", "end": "19:30", "type": "second_half"}
-}
-# Saturday schedule - 6 пар (можно оставить как есть или настроить аналогично)
+# Saturday schedule - 6 пар (можно настроить аналогично если нужно)
 SATURDAY_CALL_SCHEDULE = {
     1: {"start": "8:30", "end": "9:45"},
     "break1": {"start": "9:45", "end": "9:55", "duration": 10},
@@ -95,7 +94,7 @@ SATURDAY_CALL_SCHEDULE = {
     6: {"start": "16:10", "end": "17:25"}
 }
 
-# Short day schedule - 6 пар (можно оставить как есть или настроить аналогично)
+# Short day schedule - 6 пар (можно настроить аналогично если нужно)
 SHORT_DAY_CALL_SCHEDULE = {
     1: {"start": "8:30", "end": "9:30"},
     "break1": {"start": "9:30", "end": "9:40", "duration": 10},
@@ -109,7 +108,6 @@ SHORT_DAY_CALL_SCHEDULE = {
     "break5": {"start": "14:40", "end": "14:50", "duration": 10},
     6: {"start": "14:50", "end": "15:50"}
 }
-
 # -------------------- DATABASE FUNCTIONS --------------------
 
 def init_db():
@@ -1471,31 +1469,43 @@ def format_call_schedule(schedule, day_type):
     """Formats call schedule for display"""
     result = [f"🔔 <b>Расписание звонков ({day_type})</b>\n\n"]
     
-    # Создаем список всех элементов в правильном порядке
-    items = []
-    for key, value in schedule.items():
-        if isinstance(key, int):
-            items.append(('lesson', key, value))
-        elif key.startswith('break'):
-            items.append(('break', key, value))
+    if isinstance(schedule, list):
+        # Новый формат с списком
+        for item in schedule:
+            if item['type'] == 'lesson':
+                part_text = " (1-я часть)" if item['part'] == 1 else " (2-я часть)"
+                result.append(f"{item['number']} пара{part_text}: {item['start']} - {item['end']}")
+            else:  # break
+                result.append(f"🕓 Перемена: {item['start']} - {item['end']} ({item['duration']} мин)")
+    else:
+        # Старый формат (для субботы и коротких дней)
+        for key, value in schedule.items():
+            if isinstance(key, int):  # Lesson
+                result.append(f"{key} пара: {value['start']} - {value['end']}")
+            else:  # Break
+                if 'duration' in value:
+                    result.append(f"🕓 Перемена: {value['start']} - {value['end']} ({value['duration']} мин)")
+                else:
+                    result.append(f"🕓 Перемена: {value['start']} - {value['end']}")
     
-    # Сортируем по ключам чтобы сохранить порядок
-    items.sort(key=lambda x: (0 if x[0] == 'lesson' else 1, x[1]))
-    
-    for item_type, key, value in items:
-        if item_type == 'lesson':
-            if 'type' in value:
-                lesson_type = " (1-я часть)" if value['type'] == 'first_half' else " (2-я часть)"
-            else:
-                lesson_type = ""
-            result.append(f"{key} пара{lesson_type}: {value['start']} - {value['end']}")
-        else:  # break
-            if 'duration' in value:
-                result.append(f"🕓 Перемена: {value['start']} - {value['end']} ({value['duration']} мин)")
-            else:
-                result.append(f"🕓 Перемена: {value['start']} - {value['end']}")
-    
-    return "\n".join(result)
+    return "\n".join(result) 
+
+async def show_call_schedule(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Shows the appropriate call schedule based on day of week"""
+    try:
+        now = datetime.now(YEKATERINBURG_TZ)
+        day_of_week = now.weekday()  # 0=Monday, 6=Sunday
+        
+        if day_of_week == 5:  # Saturday
+            schedule_text = format_call_schedule(SATURDAY_CALL_SCHEDULE, "Суббота")
+        elif day_of_week == 6:  # Sunday
+            schedule_text = "🔔 <b>Воскресенье - выходной день</b>"
+        else:  # Monday-Friday
+            schedule_text = format_call_schedule(REGULAR_CALL_SCHEDULE, "Понедельник-Пятница")
+        
+        await update.message.reply_text(schedule_text, parse_mode='HTML')
+    except Exception as e:
+        print(f"ОШИБКА: Ошибка в show_call_schedule: {e}")
 # -------------------- LESSON NOTIFICATION FUNCTIONS --------------------
 
 async def check_lesson_notifications(context: ContextTypes.DEFAULT_TYPE):
