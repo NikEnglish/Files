@@ -54,33 +54,34 @@ user_media_collections = {}
 # -------------------- UPDATED CALL SCHEDULES --------------------
 
 # Regular schedule (Monday-Friday)
+# Regular schedule (Monday-Friday) - 6 пар по 2 части
 REGULAR_CALL_SCHEDULE = {
     1: {"start": "8:30", "end": "9:15", "type": "first_half"},
     "break1": {"start": "9:15", "end": "9:20", "duration": 5},
-    2: {"start": "9:20", "end": "10:05", "type": "second_half"},
+    "1_second": {"start": "9:20", "end": "10:05", "type": "second_half"},
     "break2": {"start": "10:05", "end": "10:15", "duration": 10},
-    3: {"start": "10:15", "end": "11:00", "type": "first_half"},
+    2: {"start": "10:15", "end": "11:00", "type": "first_half"},
     "break3": {"start": "11:00", "end": "11:05", "duration": 5},
-    4: {"start": "11:05", "end": "11:50", "type": "second_half"},
+    "2_second": {"start": "11:05", "end": "11:50", "type": "second_half"},
     "break4": {"start": "11:50", "end": "12:40", "duration": 50},
-    5: {"start": "12:40", "end": "13:25", "type": "first_half"},
+    3: {"start": "12:40", "end": "13:25", "type": "first_half"},
     "break5": {"start": "13:25", "end": "13:30", "duration": 5},
-    6: {"start": "13:30", "end": "14:15", "type": "second_half"},
+    "3_second": {"start": "13:30", "end": "14:15", "type": "second_half"},
     "break6": {"start": "14:15", "end": "14:25", "duration": 10},
-    7: {"start": "14:25", "end": "15:10", "type": "first_half"},
+    4: {"start": "14:25", "end": "15:10", "type": "first_half"},
     "break7": {"start": "15:10", "end": "15:15", "duration": 5},
-    8: {"start": "15:15", "end": "16:00", "type": "second_half"},
+    "4_second": {"start": "15:15", "end": "16:00", "type": "second_half"},
     "break8": {"start": "16:00", "end": "16:10", "duration": 10},
-    9: {"start": "16:10", "end": "16:55", "type": "first_half"},
+    5: {"start": "16:10", "end": "16:55", "type": "first_half"},
     "break9": {"start": "16:55", "end": "17:00", "duration": 5},
-    10: {"start": "17:00", "end": "17:45", "type": "second_half"},
+    "5_second": {"start": "17:00", "end": "17:45", "type": "second_half"},
     "break10": {"start": "17:45", "end": "17:55", "duration": 10},
-    11: {"start": "17:55", "end": "18:40", "type": "first_half"},
+    6: {"start": "17:55", "end": "18:40", "type": "first_half"},
     "break11": {"start": "18:40", "end": "18:45", "duration": 5},
-    12: {"start": "18:45", "end": "19:30", "type": "second_half"}
+    "6_second": {"start": "18:45", "end": "19:30", "type": "second_half"}
 }
 
-# Saturday schedule
+# Saturday schedule - 6 пар (можно оставить как есть или настроить аналогично)
 SATURDAY_CALL_SCHEDULE = {
     1: {"start": "8:30", "end": "9:45"},
     "break1": {"start": "9:45", "end": "9:55", "duration": 10},
@@ -95,7 +96,7 @@ SATURDAY_CALL_SCHEDULE = {
     6: {"start": "16:10", "end": "17:25"}
 }
 
-# Short day schedule
+# Short day schedule - 6 пар (можно оставить как есть или настроить аналогично)
 SHORT_DAY_CALL_SCHEDULE = {
     1: {"start": "8:30", "end": "9:30"},
     "break1": {"start": "9:30", "end": "9:40", "duration": 10},
