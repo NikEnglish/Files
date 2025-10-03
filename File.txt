@@ -19,17 +19,14 @@ AWAITING_HOMEWORK, AWAITING_INFO, AWAITING_SPORT, AWAITING_SUGGESTION, AWAITING_
 
 # User Roles
 ROLE_STUDENT = 'student'
+ROLE_STAROSTA = 'starosta'
+ROLE_DEPUTY_STAROSTA = 'deputy_starosta'
 ROLE_PHYSICAL_ORGANIZER = 'physical_organizer'
-ROLE_IT_SPECIALIST = 'it_specialist'
+ROLE_DEVELOPER = 'developer'
 ROLE_CUSTOM = 'custom'
 
-# Special Users (ID and username)
+# Special Users (только разработчик)
 DEVELOPER_ID = 1775957387
-SPECIAL_USERS = {
-    5013216284: {'role': ROLE_IT_SPECIALIST, 'username': '@kimertuzz3', 'name': 'Староста'},
-    DEVELOPER_ID: {'role': ROLE_IT_SPECIALIST, 'username': '@imya_polbzovatela', 'name': 'Зам Старосты (Разработчик)'},
-    1610410800: {'role': ROLE_PHYSICAL_ORGANIZER, 'username': '@Dashulyabed', 'name': 'Физ. орг.'}
-}
 
 # Dynamic list of groups (will be populated from API)
 ALL_GROUPS = []
@@ -52,7 +49,8 @@ BLOCK_DURATIONS = [600, 1800, 3600, 7200, 36000, 180000]
 user_media_collections = {}
 
 # -------------------- UPDATED CALL SCHEDULES --------------------
-# Regular schedule (Monday-Friday) - 6 пар по 2 части
+
+# Regular schedule (Monday-Friday)
 REGULAR_CALL_SCHEDULE = [
     {"type": "lesson", "number": 1, "part": 1, "start": "8:30", "end": "9:15"},
     {"type": "break", "start": "9:15", "end": "9:20", "duration": 5},
@@ -79,7 +77,7 @@ REGULAR_CALL_SCHEDULE = [
     {"type": "lesson", "number": 6, "part": 2, "start": "18:45", "end": "19:30"}
 ]
 
-# Saturday schedule - 6 пар (можно настроить аналогично если нужно)
+# Saturday schedule
 SATURDAY_CALL_SCHEDULE = {
     1: {"start": "8:30", "end": "9:45"},
     "break1": {"start": "9:45", "end": "9:55", "duration": 10},
@@ -94,7 +92,7 @@ SATURDAY_CALL_SCHEDULE = {
     6: {"start": "16:10", "end": "17:25"}
 }
 
-# Short day schedule - 6 пар (можно настроить аналогично если нужно)
+# Short day schedule
 SHORT_DAY_CALL_SCHEDULE = {
     1: {"start": "8:30", "end": "9:30"},
     "break1": {"start": "9:30", "end": "9:40", "duration": 10},
@@ -108,6 +106,7 @@ SHORT_DAY_CALL_SCHEDULE = {
     "break5": {"start": "14:40", "end": "14:50", "duration": 10},
     6: {"start": "14:50", "end": "15:50"}
 }
+
 # -------------------- DATABASE FUNCTIONS --------------------
 
 def init_db():
@@ -119,10 +118,9 @@ def init_db():
             try:
                 conn = sqlite3.connect('bot_data.db')
                 cur = conn.cursor()
-                # Проверяем наличие колонки custom_role_name
-                cur.execute("PRAGMA table_info(users)")
-                columns = [column[1] for column in cur.fetchall()]
-                if 'custom_role_name' not in columns:
+                # Проверяем наличие таблицы group_roles
+                cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='group_roles'")
+                if not cur.fetchone():
                     print("ЛОГ: Обнаружена устаревшая структура базы, пересоздаем...")
                     conn.close()
                     os.remove('bot_data.db')
@@ -133,7 +131,7 @@ def init_db():
                 if conn:
                     conn.close()
                 os.remove('bot_data.db')
-                conn = sqlite3.connect('bot_data.db')
+                    conn = sqlite3.connect('bot_data.db')
                 cur = conn.cursor()
         else:
             conn = sqlite3.connect('bot_data.db')
@@ -151,12 +149,26 @@ def init_db():
             can_send_homework BOOLEAN DEFAULT 0,
             can_send_notifications BOOLEAN DEFAULT 0,
             can_send_sport_notifications BOOLEAN DEFAULT 0,
+            can_send_global_notifications BOOLEAN DEFAULT 0,
             can_delete_homework BOOLEAN DEFAULT 0,
             can_delete_notifications BOOLEAN DEFAULT 0,
             can_delete_sport_notifications BOOLEAN DEFAULT 0,
             can_delete_suggestions BOOLEAN DEFAULT 0,
             can_manage_users BOOLEAN DEFAULT 0,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )''')
+        
+        # Group roles table - роли для каждой группы
+        cur.execute('''CREATE TABLE IF NOT EXISTS group_roles (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            group_name TEXT NOT NULL,
+            role_type TEXT NOT NULL,
+            user_id INTEGER,
+            username TEXT,
+            first_name TEXT,
+            assigned_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(group_name, role_type),
+            FOREIGN KEY (user_id) REFERENCES users (user_id) ON DELETE SET NULL
         )''')
         
         # User notification settings table
@@ -321,6 +333,56 @@ def get_user(user_id):
     finally:
         conn.close()
 
+def get_group_role(group_name, role_type):
+    """Gets role for specific group"""
+    conn = get_db_connection()
+    if not conn: return None
+    try:
+        role = conn.execute(
+            'SELECT * FROM group_roles WHERE group_name = ? AND role_type = ?', 
+            (group_name, role_type)
+        ).fetchone()
+        return role
+    except sqlite3.Error as e:
+        print(f"ОШИБКА: Ошибка базы данных при получении роли группы: {e}")
+        return None
+    finally:
+        conn.close()
+
+def set_group_role(group_name, role_type, user_id, username, first_name):
+    """Sets role for specific group"""
+    conn = get_db_connection()
+    if not conn: return False
+    try:
+        conn.execute('''INSERT OR REPLACE INTO group_roles 
+                     (group_name, role_type, user_id, username, first_name) 
+                     VALUES (?, ?, ?, ?, ?)''',
+                     (group_name, role_type, user_id, username, first_name))
+        conn.commit()
+        print(f"ЛОГ: Установлена роль {role_type} для группы {group_name} - пользователь {first_name}")
+        return True
+    except sqlite3.Error as e:
+        print(f"ОШИБКА: Ошибка базы данных при установке роли группы: {e}")
+        return False
+    finally:
+        conn.close()
+
+def remove_group_role(group_name, role_type):
+    """Removes role from group"""
+    conn = get_db_connection()
+    if not conn: return False
+    try:
+        conn.execute('DELETE FROM group_roles WHERE group_name = ? AND role_type = ?', 
+                    (group_name, role_type))
+        conn.commit()
+        print(f"ЛОГ: Удалена роль {role_type} для группы {group_name}")
+        return True
+    except sqlite3.Error as e:
+        print(f"ОШИБКА: Ошибка базы данных при удалении роли группы: {e}")
+        return False
+    finally:
+        conn.close()
+
 def get_user_notification_settings(user_id):
     """Gets user notification settings"""
     conn = get_db_connection()
@@ -374,24 +436,23 @@ def add_user(user_id, username, first_name, last_name):
         existing_user = conn.execute('SELECT * FROM users WHERE user_id = ?', (user_id,)).fetchone()
         
         role = ROLE_STUDENT
-        custom_role_name = None
         
-        # Проверяем специальных пользователей
-        if user_id in SPECIAL_USERS:
-            role = SPECIAL_USERS[user_id]['role']
+        # Проверяем разработчика
+        if user_id == DEVELOPER_ID:
+            role = ROLE_DEVELOPER
         
         if not existing_user:
-            conn.execute('''INSERT INTO users (user_id, username, first_name, last_name, role, custom_role_name)
-                         VALUES (?, ?, ?, ?, ?, ?)''',
-                         (user_id, username, first_name, last_name, role, custom_role_name))
+            conn.execute('''INSERT INTO users (user_id, username, first_name, last_name, role)
+                         VALUES (?, ?, ?, ?, ?)''',
+                         (user_id, username, first_name, last_name, role))
             # Add default notification settings
             conn.execute('INSERT INTO user_notification_settings (user_id) VALUES (?)', (user_id,))
             print(f"ЛОГ: Добавлен новый пользователь: {first_name} (ID: {user_id}) с ролью {role}")
         else:
             conn.execute('''UPDATE users 
-                         SET username = ?, first_name = ?, last_name = ?, role = ?, custom_role_name = ?
+                         SET username = ?, first_name = ?, last_name = ?, role = ?
                          WHERE user_id = ?''',
-                         (username, first_name, last_name, role, custom_role_name, user_id))
+                         (username, first_name, last_name, role, user_id))
             print(f"ЛОГ: Обновлен пользователь: {first_name} (ID: {user_id}), роль: {role}")
         
         conn.commit()
@@ -409,6 +470,7 @@ def update_user_rights(user_id, rights_data):
                      can_send_homework = ?,
                      can_send_notifications = ?,
                      can_send_sport_notifications = ?,
+                     can_send_global_notifications = ?,
                      can_delete_homework = ?,
                      can_delete_notifications = ?,
                      can_delete_sport_notifications = ?,
@@ -420,6 +482,7 @@ def update_user_rights(user_id, rights_data):
                      (rights_data.get('can_send_homework', 0),
                       rights_data.get('can_send_notifications', 0),
                       rights_data.get('can_send_sport_notifications', 0),
+                      rights_data.get('can_send_global_notifications', 0),
                       rights_data.get('can_delete_homework', 0),
                       rights_data.get('can_delete_notifications', 0),
                       rights_data.get('can_delete_sport_notifications', 0),
@@ -433,105 +496,6 @@ def update_user_rights(user_id, rights_data):
         return True
     except sqlite3.Error as e:
         print(f"ОШИБКА: Ошибка базы данных при обновлении прав: {e}")
-        return False
-    finally:
-        conn.close()
-
-def add_special_user(user_id, username, first_name, last_name, group_name, role_type, custom_name=None):
-    """Adds a special user with specific rights"""
-    conn = get_db_connection()
-    if not conn: return False
-    try:
-        rights_data = {
-            'role': ROLE_CUSTOM,
-            'custom_role_name': custom_name
-        }
-        
-        # Устанавливаем права в зависимости от типа роли
-        if role_type == 'starosta':
-            rights_data.update({
-                'can_send_homework': 1,
-                'can_send_notifications': 1,
-                'can_delete_homework': 1,
-                'can_delete_notifications': 1,
-                'can_delete_suggestions': 1,
-                'can_manage_users': 1,
-                'custom_role_name': 'Староста'
-            })
-        elif role_type == 'deputy_starosta':
-            rights_data.update({
-                'can_send_homework': 1,
-                'can_send_notifications': 1,
-                'can_delete_homework': 1,
-                'can_delete_notifications': 1,
-                'can_delete_suggestions': 1,
-                'can_manage_users': 1,
-                'custom_role_name': 'Зам Старосты'
-            })
-        elif role_type == 'physical_organizer':
-            rights_data.update({
-                'can_send_sport_notifications': 1,
-                'can_delete_sport_notifications': 1,
-                'custom_role_name': 'Физ. орг.'
-            })
-        elif role_type == 'custom':
-            rights_data.update({
-                'can_send_homework': 1,
-                'can_send_notifications': 1,
-                'can_send_sport_notifications': 1,
-                'can_delete_homework': 1,
-                'can_delete_notifications': 1,
-                'can_delete_sport_notifications': 1,
-                'can_delete_suggestions': 1,
-                'can_manage_users': 1,
-                'custom_role_name': custom_name
-            })
-        
-        # Добавляем/обновляем пользователя
-        existing_user = conn.execute('SELECT * FROM users WHERE user_id = ?', (user_id,)).fetchone()
-        
-        if not existing_user:
-            conn.execute('''INSERT INTO users (user_id, username, first_name, last_name, group_name, role, custom_role_name,
-                         can_send_homework, can_send_notifications, can_send_sport_notifications,
-                         can_delete_homework, can_delete_notifications, can_delete_sport_notifications,
-                         can_delete_suggestions, can_manage_users)
-                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
-                         (user_id, username, first_name, last_name, group_name,
-                          rights_data['role'], rights_data['custom_role_name'],
-                          rights_data.get('can_send_homework', 0),
-                          rights_data.get('can_send_notifications', 0),
-                          rights_data.get('can_send_sport_notifications', 0),
-                          rights_data.get('can_delete_homework', 0),
-                          rights_data.get('can_delete_notifications', 0),
-                          rights_data.get('can_delete_sport_notifications', 0),
-                          rights_data.get('can_delete_suggestions', 0),
-                          rights_data.get('can_manage_users', 0)))
-            # Add default notification settings
-            conn.execute('INSERT INTO user_notification_settings (user_id) VALUES (?)', (user_id,))
-        else:
-            conn.execute('''UPDATE users SET
-                         username = ?, first_name = ?, last_name = ?, group_name = ?, role = ?, custom_role_name = ?,
-                         can_send_homework = ?, can_send_notifications = ?, can_send_sport_notifications = ?,
-                         can_delete_homework = ?, can_delete_notifications = ?, can_delete_sport_notifications = ?,
-                         can_delete_suggestions = ?, can_manage_users = ?
-                         WHERE user_id = ?''',
-                         (username, first_name, last_name, group_name,
-                          rights_data['role'], rights_data['custom_role_name'],
-                          rights_data.get('can_send_homework', 0),
-                          rights_data.get('can_send_notifications', 0),
-                          rights_data.get('can_send_sport_notifications', 0),
-                          rights_data.get('can_delete_homework', 0),
-                          rights_data.get('can_delete_notifications', 0),
-                          rights_data.get('can_delete_sport_notifications', 0),
-                          rights_data.get('can_delete_suggestions', 0),
-                          rights_data.get('can_manage_users', 0),
-                          user_id))
-        
-        conn.commit()
-        print(f"ЛОГ: Добавлен/обновлен специальный пользователь: {first_name} (ID: {user_id}) с ролью {rights_data['custom_role_name']}")
-        return True
-    except sqlite3.Error as e:
-        print(f"ОШИБКА: Ошибка базы данных при добавлении специального пользователя: {e}")
         return False
     finally:
         conn.close()
@@ -1008,53 +972,257 @@ def get_media_collection(user_id, media_type):
 
 # -------------------- USER RIGHTS CHECK FUNCTIONS --------------------
 
-def can_send_homework(user_id):
+def can_send_homework(user_id, group_name=None):
     """Checks if user can send homework"""
     user = get_user(user_id)
     if not user: return False
-    return user['can_send_homework'] == 1 or user['role'] == ROLE_IT_SPECIALIST or user_id == DEVELOPER_ID
+    
+    # Разработчик может всё
+    if user_id == DEVELOPER_ID:
+        return True
+    
+    # Проверяем права пользователя
+    if user['can_send_homework'] == 1:
+        return True
+    
+    # Проверяем, является ли пользователь старостой своей группы
+    if group_name and user['group_name'] == group_name:
+        starosta = get_group_role(group_name, ROLE_STAROSTA)
+        if starosta and starosta['user_id'] == user_id:
+            return True
+    
+    return False
 
-def can_send_notifications(user_id):
+def can_send_notifications(user_id, group_name=None):
     """Checks if user can send notifications"""
     user = get_user(user_id)
     if not user: return False
-    return user['can_send_notifications'] == 1 or user['role'] == ROLE_IT_SPECIALIST or user_id == DEVELOPER_ID
+    
+    # Разработчик может всё
+    if user_id == DEVELOPER_ID:
+        return True
+    
+    # Проверяем права пользователя
+    if user['can_send_notifications'] == 1:
+        return True
+    
+    # Проверяем, является ли пользователь старостой своей группы
+    if group_name and user['group_name'] == group_name:
+        starosta = get_group_role(group_name, ROLE_STAROSTA)
+        if starosta and starosta['user_id'] == user_id:
+            return True
+    
+    return False
 
-def can_send_sport_notifications(user_id):
+def can_send_sport_notifications(user_id, group_name=None):
     """Checks if user can send sport notifications"""
     user = get_user(user_id)
     if not user: return False
-    return user['can_send_sport_notifications'] == 1 or user['role'] == ROLE_PHYSICAL_ORGANIZER or user_id == DEVELOPER_ID
+    
+    # Разработчик может всё
+    if user_id == DEVELOPER_ID:
+        return True
+    
+    # Проверяем права пользователя
+    if user['can_send_sport_notifications'] == 1:
+        return True
+    
+    # Проверяем, является ли пользователь физоргом своей группы
+    if group_name and user['group_name'] == group_name:
+        fizorg = get_group_role(group_name, ROLE_PHYSICAL_ORGANIZER)
+        if fizorg and fizorg['user_id'] == user_id:
+            return True
+    
+    return False
 
-def can_delete_homework(user_id):
+def can_send_global_notifications(user_id):
+    """Checks if user can send global notifications"""
+    user = get_user(user_id)
+    if not user: return False
+    
+    # Разработчик может всё
+    if user_id == DEVELOPER_ID:
+        return True
+    
+    # Проверяем права пользователя
+    return user['can_send_global_notifications'] == 1
+
+def can_delete_homework(user_id, group_name=None):
     """Checks if user can delete homework"""
     user = get_user(user_id)
     if not user: return False
-    return user['can_delete_homework'] == 1 or user['role'] == ROLE_IT_SPECIALIST or user_id == DEVELOPER_ID
+    
+    # Разработчик может всё
+    if user_id == DEVELOPER_ID:
+        return True
+    
+    # Проверяем права пользователя
+    if user['can_delete_homework'] == 1:
+        return True
+    
+    # Проверяем, является ли пользователь старостой своей группы
+    if group_name and user['group_name'] == group_name:
+        starosta = get_group_role(group_name, ROLE_STAROSTA)
+        if starosta and starosta['user_id'] == user_id:
+            return True
+    
+    return False
 
-def can_delete_notifications(user_id):
+def can_delete_notifications(user_id, group_name=None):
     """Checks if user can delete notifications"""
     user = get_user(user_id)
     if not user: return False
-    return user['can_delete_notifications'] == 1 or user['role'] == ROLE_IT_SPECIALIST or user_id == DEVELOPER_ID
+    
+    # Разработчик может всё
+    if user_id == DEVELOPER_ID:
+        return True
+    
+    # Проверяем права пользователя
+    if user['can_delete_notifications'] == 1:
+        return True
+    
+    # Проверяем, является ли пользователь старостой своей группы
+    if group_name and user['group_name'] == group_name:
+        starosta = get_group_role(group_name, ROLE_STAROSTA)
+        if starosta and starosta['user_id'] == user_id:
+            return True
+    
+    return False
 
-def can_delete_sport_notifications(user_id):
+def can_delete_sport_notifications(user_id, group_name=None):
     """Checks if user can delete sport notifications"""
     user = get_user(user_id)
     if not user: return False
-    return user['can_delete_sport_notifications'] == 1 or user['role'] == ROLE_PHYSICAL_ORGANIZER or user_id == DEVELOPER_ID
+    
+    # Разработчик может всё
+    if user_id == DEVELOPER_ID:
+        return True
+    
+    # Проверяем права пользователя
+    if user['can_delete_sport_notifications'] == 1:
+        return True
+    
+    # Проверяем, является ли пользователь физоргом своей группы
+    if group_name and user['group_name'] == group_name:
+        fizorg = get_group_role(group_name, ROLE_PHYSICAL_ORGANIZER)
+        if fizorg and fizorg['user_id'] == user_id:
+            return True
+    
+    return False
 
 def can_delete_suggestions(user_id):
     """Checks if user can delete suggestions"""
     user = get_user(user_id)
     if not user: return False
-    return user['can_delete_suggestions'] == 1 or user['role'] in [ROLE_IT_SPECIALIST, ROLE_PHYSICAL_ORGANIZER] or user_id == DEVELOPER_ID
+    
+    # Разработчик может всё
+    if user_id == DEVELOPER_ID:
+        return True
+    
+    # Проверяем права пользователя
+    return user['can_delete_suggestions'] == 1
 
 def can_manage_users(user_id):
     """Checks if user can manage users"""
     user = get_user(user_id)
     if not user: return False
-    return user['can_manage_users'] == 1 or user_id == DEVELOPER_ID
+    
+    # Разработчик может всё
+    return user_id == DEVELOPER_ID
+
+def get_user_role_display(user_id):
+    """Gets user role display name"""
+    user = get_user(user_id)
+    if not user: return "Студент"
+    
+    if user_id == DEVELOPER_ID:
+        return "Разработчик"
+    
+    if user['custom_role_name']:
+        return user['custom_role_name']
+    
+    role_map = {
+        ROLE_STAROSTA: "Староста",
+        ROLE_DEPUTY_STAROSTA: "Зам старосты",
+        ROLE_PHYSICAL_ORGANIZER: "Физорг",
+        ROLE_STUDENT: "Студент"
+    }
+    
+    return role_map.get(user['role'], "Студент")
+
+# -------------------- CONTACT FUNCTIONS --------------------
+
+async def contact_developer(update: Update):
+    """Contact the developer"""
+    try:
+        await update.message.reply_text(
+            "👨‍💻 <b>Связь с разработчиком</b>\n\n"
+            "📞 Telegram: @imya_polbzovatela\n"
+            "💬 По всем вопросам работы бота обращайтесь к разработчику",
+            parse_mode='HTML'
+        )
+    except Exception as e:
+        print(f"ОШИБКА: Ошибка в contact_developer: {e}")
+
+async def contact_starosta(update: Update, group_name: str):
+    """Contact the starosta for specific group"""
+    try:
+        starosta = get_group_role(group_name, ROLE_STAROSTA)
+        if starosta:
+            username = f"@{starosta['username']}" if starosta['username'] else starosta['first_name']
+            await update.message.reply_text(
+                f"👑 <b>Связь со старостой группы {group_name}</b>\n\n"
+                f"👤 Имя: {starosta['first_name']}\n"
+                f"📞 Telegram: {username}",
+                parse_mode='HTML'
+            )
+        else:
+            await update.message.reply_text(
+                f"❌ Для группы {group_name} староста еще не назначен.\n"
+                f"Обратитесь к разработчику для назначения старосты."
+            )
+    except Exception as e:
+        print(f"ОШИБКА: Ошибка в contact_starosta: {e}")
+
+async def contact_deputy_starosta(update: Update, group_name: str):
+    """Contact the deputy starosta for specific group"""
+    try:
+        deputy = get_group_role(group_name, ROLE_DEPUTY_STAROSTA)
+        if deputy:
+            username = f"@{deputy['username']}" if deputy['username'] else deputy['first_name']
+            await update.message.reply_text(
+                f"👑 <b>Связь с замом старосты группы {group_name}</b>\n\n"
+                f"👤 Имя: {deputy['first_name']}\n"
+                f"📞 Telegram: {username}",
+                parse_mode='HTML'
+            )
+        else:
+            await update.message.reply_text(
+                f"❌ Для группы {group_name} зам старосты еще не назначен.\n"
+                f"Обратитесь к разработчику для назначения зама старосты."
+            )
+    except Exception as e:
+        print(f"ОШИБКА: Ошибка в contact_deputy_starosta: {e}")
+
+async def contact_physical_organizer(update: Update, group_name: str):
+    """Contact the physical organizer for specific group"""
+    try:
+        fizorg = get_group_role(group_name, ROLE_PHYSICAL_ORGANIZER)
+        if fizorg:
+            username = f"@{fizorg['username']}" if fizorg['username'] else fizorg['first_name']
+            await update.message.reply_text(
+                f"🏃 <b>Связь с физоргом группы {group_name}</b>\n\n"
+                f"👤 Имя: {fizorg['first_name']}\n"
+                f"📞 Telegram: {username}",
+                parse_mode='HTML'
+            )
+        else:
+            await update.message.reply_text(
+                f"❌ Для группы {group_name} физорг еще не назначен.\n"
+                f"Обратитесь к разработчику для назначения физорга."
+            )
+    except Exception as e:
+        print(f"ОШИБКА: Ошибка в contact_physical_organizer: {e}")
 
 # -------------------- UPDATED SCHEDULE FUNCTIONS --------------------
 
@@ -1352,7 +1520,7 @@ async def check_schedule_changes(context: ContextTypes.DEFAULT_TYPE):
             change_message = f"🔄 <b>Добавлена новая группа: {group_name}</b>\n\nИспользуйте команду '🎓 Сменить группу' для выбора этой группы."
             
             # Notify special users about new group
-            special_users = [u for u in get_all_users() if u['user_id'] in SPECIAL_USERS or u['user_id'] == DEVELOPER_ID]
+            special_users = [u for u in get_all_users() if u['user_id'] == DEVELOPER_ID]
             for user in special_users:
                 try:
                     await context.bot.send_message(
@@ -1367,7 +1535,7 @@ async def check_schedule_changes(context: ContextTypes.DEFAULT_TYPE):
             change_message = f"🔄 <b>Группа {group_name} удалена из расписания</b>\n\nУченики этой группы могут выбрать другую группу."
             
             # Notify special users about removed group
-            special_users = [u for u in get_all_users() if u['user_id'] in SPECIAL_USERS or u['user_id'] == DEVELOPER_ID]
+            special_users = [u for u in get_all_users() if u['user_id'] == DEVELOPER_ID]
             for user in special_users:
                 try:
                     await context.bot.send_message(
@@ -1465,6 +1633,23 @@ async def send_morning_schedule(context: ContextTypes.DEFAULT_TYPE):
 
 # -------------------- UPDATED CALL SCHEDULE FUNCTIONS --------------------
 
+async def show_call_schedule(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Shows the appropriate call schedule based on day of week"""
+    try:
+        now = datetime.now(YEKATERINBURG_TZ)
+        day_of_week = now.weekday()  # 0=Monday, 6=Sunday
+        
+        if day_of_week == 5:  # Saturday
+            schedule_text = format_call_schedule(SATURDAY_CALL_SCHEDULE, "Суббота")
+        elif day_of_week == 6:  # Sunday
+            schedule_text = "🔔 <b>Воскресенье - выходной день</b>"
+        else:  # Monday-Friday
+            schedule_text = format_call_schedule(REGULAR_CALL_SCHEDULE, "Понедельник-Пятница")
+        
+        await update.message.reply_text(schedule_text, parse_mode='HTML')
+    except Exception as e:
+        print(f"ОШИБКА: Ошибка в show_call_schedule: {e}")
+
 def format_call_schedule(schedule, day_type):
     """Formats call schedule for display"""
     result = [f"🔔 <b>Расписание звонков ({day_type})</b>\n\n"]
@@ -1488,24 +1673,8 @@ def format_call_schedule(schedule, day_type):
                 else:
                     result.append(f"🕓 Перемена: {value['start']} - {value['end']}")
     
-    return "\n".join(result) 
+    return "\n".join(result)
 
-async def show_call_schedule(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Shows the appropriate call schedule based on day of week"""
-    try:
-        now = datetime.now(YEKATERINBURG_TZ)
-        day_of_week = now.weekday()  # 0=Monday, 6=Sunday
-        
-        if day_of_week == 5:  # Saturday
-            schedule_text = format_call_schedule(SATURDAY_CALL_SCHEDULE, "Суббота")
-        elif day_of_week == 6:  # Sunday
-            schedule_text = "🔔 <b>Воскресенье - выходной день</b>"
-        else:  # Monday-Friday
-            schedule_text = format_call_schedule(REGULAR_CALL_SCHEDULE, "Понедельник-Пятница")
-        
-        await update.message.reply_text(schedule_text, parse_mode='HTML')
-    except Exception as e:
-        print(f"ОШИБКА: Ошибка в show_call_schedule: {e}")
 # -------------------- LESSON NOTIFICATION FUNCTIONS --------------------
 
 async def check_lesson_notifications(context: ContextTypes.DEFAULT_TYPE):
@@ -1767,10 +1936,10 @@ async def check_birthdays(context: ContextTypes.DEFAULT_TYPE):
 # -------------------- GLOBAL NOTIFICATION FUNCTIONS --------------------
 
 async def ask_global_notification_details(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Asks for global notification details (only for developer)"""
+    """Asks for global notification details (only for developer and authorized users)"""
     user_id = update.effective_user.id
     
-    if user_id != DEVELOPER_ID:
+    if not can_send_global_notifications(user_id):
         await update.message.reply_text("❌ У вас нет прав для этого действия.")
         return ConversationHandler.END
     
@@ -1794,7 +1963,7 @@ async def handle_global_notification_input(update: Update, context: ContextTypes
     """Handles global notification input"""
     user_id = update.effective_user.id
     
-    if user_id != DEVELOPER_ID:
+    if not can_send_global_notifications(user_id):
         await update.message.reply_text("❌ У вас нет прав для этого действия.")
         return await cancel_conversation(update, context)
     
@@ -1869,10 +2038,13 @@ async def handle_global_notification_input(update: Update, context: ContextTypes
 
 async def send_global_notification_to_all(bot, global_notification_id, message, added_by):
     """Sends a global notification to all users"""
+    user_data = get_user(added_by)
+    role_display = get_user_role_display(added_by)
+    
     global_text = (
-        f"🌍 <b>ВАЖНОЕ УВЕДОМЛЕНИЕ ОТ РАЗРАБОТЧИКА</b>\n\n"
+        f"🌍 <b>ГЛОБАЛЬНОЕ УВЕДОМЛЕНИЕ</b>\n\n"
         f"{message}\n\n"
-        f"👤 <b>От:</b> Зам Старосты (Разработчик)"
+        f"👤 <b>От:</b> {role_display}"
     )
     
     conn = get_db_connection()
@@ -1951,14 +2123,6 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return await ask_user_group(update, context)
 
         print(f"ЛОГ: Пользователь {user.first_name} (ID: {user.id}) вернулся в главное меню.")
-        
-        if user_id in SPECIAL_USERS and user_data['role'] != SPECIAL_USERS[user_id]['role']:
-            keyboard = [[InlineKeyboardButton("🔄 Принудительно исправить роль", callback_data=f"fix_role_{user_id}")]]
-            reply_markup = InlineKeyboardMarkup(keyboard)
-            await update.message.reply_text(
-                "⚠️ Обнаружено несоответствие роли. Нажмите кнопку ниже, чтобы исправить:",
-                reply_markup=reply_markup
-            )
         
         await show_main_menu(update, user_id)
         return ConversationHandler.END
@@ -2045,18 +2209,20 @@ async def show_main_menu(update: Update, user_id: int):
             return
 
         role = user_data['role']
-        custom_role = user_data['custom_role_name']
+        group_name = user_data['group_name']
         
         welcome_text = "👋 Добро пожаловать!"
         
-        if custom_role:
-            welcome_text = f"👑 Добро пожаловать, {custom_role}!"
-        elif user_id in SPECIAL_USERS:
-            welcome_text = f"👑 Добро пожаловать, {SPECIAL_USERS[user_id]['name']}!"
-        elif role == ROLE_IT_SPECIALIST:
-            welcome_text = "👑 Добро пожаловать, Айтишник!"
+        if user_id == DEVELOPER_ID:
+            welcome_text = "👑 Добро пожаловать, Разработчик!"
+        elif role == ROLE_STAROSTA:
+            welcome_text = "👑 Добро пожаловать, Староста!"
+        elif role == ROLE_DEPUTY_STAROSTA:
+            welcome_text = "👑 Добро пожаловать, Зам Старосты!"
         elif role == ROLE_PHYSICAL_ORGANIZER:
-            welcome_text = "🏃 Добро пожаловать, Физ. орг.!"
+            welcome_text = "🏃 Добро пожаловать, Физорг!"
+        elif user_data['custom_role_name']:
+            welcome_text = f"🔧 Добро пожаловать, {user_data['custom_role_name']}!"
 
         # Создаем клавиатуру в зависимости от прав
         if user_id == DEVELOPER_ID:
@@ -2074,14 +2240,14 @@ async def show_main_menu(update: Update, user_id: int):
             keyboard = [
                 ['📅 Расписание', '📝 ДЗ'],
                 ['ℹ️ Информация', '💡 Предложения', '💡 Предложить идею'],
-                ['📢 Отправить ДЗ', '📢 Отправить уведомление'],
+                ['📢 Отправить ДЗ', '📢 Отправить уведомление', '🌍 Отправить всем группам'],
                 ['Удалить ДЗ', 'Удалить уведомление', 'Удалить предложения'],
                 ['Удалить спортивные уведомления', 'Список пользователей'],
                 ['💰 Дать денюжку', '🔔 Расписание звонков'],
                 ['🎂 Установить день рождения', '🎓 Сменить группу', '🔧 Настройки уведомлений'],
                 ['🔧 Управление правами']
             ]
-        elif can_send_homework(user_id) and can_send_notifications(user_id):
+        elif can_send_homework(user_id, group_name) and can_send_notifications(user_id, group_name):
             keyboard = [
                 ['📅 Расписание', '📝 ДЗ'],
                 ['ℹ️ Информация', '💡 Предложения', '💡 Предложить идею'],
@@ -2090,7 +2256,7 @@ async def show_main_menu(update: Update, user_id: int):
                 ['💰 Дать денюжку', '🔔 Расписание звонков'],
                 ['🎂 Установить день рождения', '🎓 Сменить группу', '🔧 Настройки уведомлений']
             ]
-        elif can_send_sport_notifications(user_id):
+        elif can_send_sport_notifications(user_id, group_name):
             keyboard = [
                 ['📅 Расписание', '📝 ДЗ'],
                 ['ℹ️ Информация', '💡 Предложения', '💡 Предложить идею'],
@@ -2098,13 +2264,23 @@ async def show_main_menu(update: Update, user_id: int):
                 ['💰 Дать денюжку', '🔔 Расписание звонков'],
                 ['🎂 Установить день рождения', '🎓 Сменить группу', '🔧 Настройки уведомлений']
             ]
+        elif can_send_global_notifications(user_id):
+            keyboard = [
+                ['📅 Расписание', '📝 ДЗ'],
+                ['ℹ️ Информация', '💡 Предложить идею'],
+                ['🌍 Отправить всем группам'],
+                ['💰 Дать денюжку', '🔔 Расписание звонков'],
+                ['📞 Связаться с разработчиком', '📞 Связаться со старостой'],
+                ['📞 Связаться с замом старосты', '📞 Связаться с физоргом'],
+                ['🎂 Установить день рождения', '🎓 Сменить группу', '🔧 Настройки уведомлений']
+            ]
         else:
             keyboard = [
                 ['📅 Расписание', '📝 ДЗ'],
                 ['ℹ️ Информация', '💡 Предложить идею'],
                 ['💰 Дать денюжку', '🔔 Расписание звонков'],
-                ['📞 Связаться со старостой', '📞 Связаться с замом старосты'],
-                ['📞 Связаться с физоргом'],
+                ['📞 Связаться с разработчиком', '📞 Связаться со старостой'],
+                ['📞 Связаться с замом старосты', '📞 Связаться с физоргом'],
                 ['🎂 Установить день рождения', '🎓 Сменить группу', '🔧 Настройки уведомлений']
             ]
         
@@ -2186,14 +2362,17 @@ async def handle_simple_message(update: Update, context: ContextTypes.DEFAULT_TY
         elif text == '🔧 Настройки уведомлений':
             return await show_notification_settings(update, context)
         
-        elif text == '📞 Связаться с физоргом':
-            await contact_physical_organizer(update)
+        elif text == '📞 Связаться с разработчиком':
+            await contact_developer(update)
         
         elif text == '📞 Связаться со старостой':
-            await contact_starosta(update)
+            await contact_starosta(update, group_name)
 
         elif text == '📞 Связаться с замом старосты':
-            await contact_deputy_starosta(update)
+            await contact_deputy_starosta(update, group_name)
+        
+        elif text == '📞 Связаться с физоргом':
+            await contact_physical_organizer(update, group_name)
         
         elif text in ['📅 Сегодня', '📅 Завтра', '📅 Неделя', '📅 Все расписание']:
             await handle_schedule_period(update, context, group_name)
@@ -2204,28 +2383,28 @@ async def handle_simple_message(update: Update, context: ContextTypes.DEFAULT_TY
         elif text == 'Удалить пользователя' and user_id == DEVELOPER_ID:
             await delete_user_menu(update, context)
 
-        elif text == 'Удалить спортивные уведомления' and can_delete_sport_notifications(user_id):
+        elif text == 'Удалить спортивные уведомления' and can_delete_sport_notifications(user_id, group_name):
             await delete_sport_notification_menu(update, context)
             
         elif text == 'Удалить предложения' and can_delete_suggestions(user_id):
             await delete_suggestions_menu(update, context)
             
-        elif text == 'Удалить ДЗ' and can_delete_homework(user_id):
+        elif text == 'Удалить ДЗ' and can_delete_homework(user_id, group_name):
             await delete_homework_menu(update, context)
 
-        elif text == 'Удалить уведомление' and can_delete_notifications(user_id):
+        elif text == 'Удалить уведомление' and can_delete_notifications(user_id, group_name):
             await delete_notification_menu(update, context)
         
         elif text == '👑 Назначить роль' and user_id == DEVELOPER_ID:
             await start_role_assignment(update, context)
             
-        elif text == '📢 Отправить ДЗ' and can_send_homework(user_id):
+        elif text == '📢 Отправить ДЗ' and can_send_homework(user_id, group_name):
             await ask_homework_details(update, context)
         
-        elif text == '📢 Отправить уведомление' and can_send_notifications(user_id):
+        elif text == '📢 Отправить уведомление' and can_send_notifications(user_id, group_name):
             await ask_notification_details(update, context)
             
-        elif text == '🌍 Отправить всем группам' and user_id == DEVELOPER_ID:
+        elif text == '🌍 Отправить всем группам' and can_send_global_notifications(user_id):
             await ask_global_notification_details(update, context)
         
         elif text == '💡 Предложить идею':
@@ -2788,12 +2967,16 @@ async def handle_suggestion_input(update: Update, context: ContextTypes.DEFAULT_
 
 async def send_homework_to_all(bot, homework_id, subject, task, deadline, group_name, added_by):
     """Sends homework to all users in a group"""
+    user_data = get_user(added_by)
+    role_display = get_user_role_display(added_by)
+    
     homework_text = (
         f"📝 <b>НОВОЕ ДОМАШНЕЕ ЗАДАНИЕ</b>\n\n"
         f"📚 <b>Предмет:</b> {subject}\n"
         f"📋 <b>Задание:</b> {task}\n"
         f"⏰ <b>Срок сдачи:</b> {deadline}\n"
         f"👥 <b>Группа:</b> {group_name}\n"
+        f"👤 <b>От:</b> {role_display}"
     )
     
     conn = get_db_connection()
@@ -2850,7 +3033,15 @@ async def send_homework_to_all(bot, homework_id, subject, task, deadline, group_
 
 async def send_notification_to_all(bot, notification_id, message, group_name, added_by):
     """Sends a notification to all users in a group"""
-    notification_text = (f"📢 <b>ВАЖНОЕ УВЕДОМЛЕНИЕ</b>\n\n{message}\n\n👥 <b>Группа:</b> {group_name}")
+    user_data = get_user(added_by)
+    role_display = get_user_role_display(added_by)
+    
+    notification_text = (
+        f"📢 <b>ВАЖНОЕ УВЕДОМЛЕНИЕ</b>\n\n"
+        f"{message}\n\n"
+        f"👥 <b>Группа:</b> {group_name}\n"
+        f"👤 <b>От:</b> {role_display}"
+    )
     
     conn = get_db_connection()
     media = conn.execute('SELECT * FROM notification_media WHERE notification_id = ?', (notification_id,)).fetchall()
@@ -2906,7 +3097,15 @@ async def send_notification_to_all(bot, notification_id, message, group_name, ad
 
 async def send_sport_notification_to_all(bot, sport_notification_id, message, group_name, added_by):
     """Sends a sport notification to all users in a group"""
-    sport_text = (f"🏃 <b>СПОРТИВНОЕ УВЕДОМЛЕНИЕ</b>\n\n{message}\n\n👥 <b>Группа:</b> {group_name}")
+    user_data = get_user(added_by)
+    role_display = get_user_role_display(added_by)
+    
+    sport_text = (
+        f"🏃 <b>СПОРТИВНОЕ УВЕДОМЛЕНИЕ</b>\n\n"
+        f"{message}\n\n"
+        f"👥 <b>Группа:</b> {group_name}\n"
+        f"👤 <b>От:</b> {role_display}"
+    )
     
     conn = get_db_connection()
     media = conn.execute('SELECT * FROM sport_notification_media WHERE sport_notification_id = ?', (sport_notification_id,)).fetchall()
@@ -3026,9 +3225,37 @@ async def show_information(update: Update, group_name: str, role: str):
     """Shows information for the user"""
     try:
         user_count = get_total_user_count()
-        info_text = f"📊 <b>Пользователей в боте:</b> {user_count}\n\n<b>Контакты:</b>\n"
-        for data in SPECIAL_USERS.values():
-            info_text += f"- <b>{data['name']}</b>: {data['username']}\n"
+        
+        # Получаем контакты для текущей группы
+        starosta = get_group_role(group_name, ROLE_STAROSTA)
+        deputy = get_group_role(group_name, ROLE_DEPUTY_STAROSTA)
+        fizorg = get_group_role(group_name, ROLE_PHYSICAL_ORGANIZER)
+        
+        info_text = (
+            f"📊 <b>Пользователей в боте:</b> {user_count}\n\n"
+            f"👥 <b>Контакты группы {group_name}:</b>\n"
+        )
+        
+        if starosta:
+            username = f"@{starosta['username']}" if starosta['username'] else starosta['first_name']
+            info_text += f"👑 <b>Староста:</b> {username}\n"
+        else:
+            info_text += "👑 <b>Староста:</b> не назначен\n"
+            
+        if deputy:
+            username = f"@{deputy['username']}" if deputy['username'] else deputy['first_name']
+            info_text += f"👑 <b>Зам старосты:</b> {username}\n"
+        else:
+            info_text += "👑 <b>Зам старосты:</b> не назначен\n"
+            
+        if fizorg:
+            username = f"@{fizorg['username']}" if fizorg['username'] else fizorg['first_name']
+            info_text += f"🏃 <b>Физорг:</b> {username}\n"
+        else:
+            info_text += "🏃 <b>Физорг:</b> не назначен\n"
+            
+        info_text += "👨‍💻 <b>Разработчик:</b> @imya_polbzovatela\n\n"
+        
         await update.message.reply_text(info_text, parse_mode='HTML')
 
         notifications = get_notifications(group_name)
@@ -3190,40 +3417,51 @@ async def show_suggestions(update: Update):
         print(f"ОШИБКА: Ошибка в show_suggestions: {e}")
 
 async def show_users_list(update: Update):
-    """Shows a list of all users for the developer"""
+    """Shows a list of all users grouped by groups"""
     try:
         users = get_all_users()
         if not users:
             await update.message.reply_text("❌ В базе данных нет пользователей.")
             return
         
-        user_list_text = "👥 <b>Список пользователей</b>\n\n"
-        
+        # Группируем пользователей по группам
+        groups_dict = {}
         for user in users:
-            username = user['username'] if user['username'] else "Нет юзернейма"
-            role_display = user['custom_role_name'] if user['custom_role_name'] else user['role']
-            group_display = user['group_name'] if user['group_name'] else "Не указана"
+            group_name = user['group_name'] if user['group_name'] else "Без группы"
+            if group_name not in groups_dict:
+                groups_dict[group_name] = []
+            groups_dict[group_name].append(user)
+        
+        user_list_text = "👥 <b>Список пользователей по группам</b>\n\n"
+        
+        for group_name, group_users in sorted(groups_dict.items()):
+            user_list_text += f"<b>📚 Группа: {group_name}</b> ({len(group_users)} чел.)\n"
             
-            user_list_text += (
-                f"<b>Имя:</b> {user['first_name']}\n"
-                f"<b>Группа:</b> {group_display}\n"
-                f"<b>Роль:</b> {role_display}\n"
-                f"<b>Юзер:</b> @{username}\n"
-                f"<b>ID:</b> <code>{user['user_id']}</code>\n\n"
-            )
+            for user in group_users:
+                username = user['username'] if user['username'] else "Нет юзернейма"
+                role_display = get_user_role_display(user['user_id'])
+                
+                user_list_text += (
+                    f"  👤 <b>Имя:</b> {user['first_name']}\n"
+                    f"  🆔 <b>ID:</b> <code>{user['user_id']}</code>\n"
+                    f"  👨‍💼 <b>Роль:</b> {role_display}\n"
+                    f"  📱 <b>Юзер:</b> @{username}\n\n"
+                )
+            
+            user_list_text += "\n"
         
         # Разбиваем сообщение на части если оно слишком длинное
         if len(user_list_text) > 4000:
             parts = []
             current_part = ""
-            lines = user_list_text.split('\n\n')
+            sections = user_list_text.split('\n\n')
             
-            for line in lines:
-                if len(current_part + line + '\n\n') > 4000:
+            for section in sections:
+                if len(current_part + section + '\n\n') > 4000:
                     parts.append(current_part)
-                    current_part = line + '\n\n'
+                    current_part = section + '\n\n'
                 else:
-                    current_part += line + '\n\n'
+                    current_part += section + '\n\n'
             
             if current_part:
                 parts.append(current_part)
@@ -3240,39 +3478,6 @@ async def show_users_list(update: Update):
         print(f"ОШИБКА: Ошибка в show_users_list: {e}")
         await update.message.reply_text("❌ Произошла ошибка при загрузке списка пользователей.")
 
-async def contact_physical_organizer(update: Update):
-    """Contact the physical organizer"""
-    try:
-        username = next((data['username'] for data in SPECIAL_USERS.values() if data['role'] == ROLE_PHYSICAL_ORGANIZER), None)
-        if username:
-            await update.message.reply_text(f"🏃 <b>Связь с Физ. оргом</b>\n\n📞 Telegram: {username}", parse_mode='HTML')
-        else:
-            await update.message.reply_text("❌ Физ. орг. не найден")
-    except Exception as e:
-        print(f"ОШИБКА: Ошибка в contact_physical_organizer: {e}")
-
-async def contact_starosta(update: Update):
-    """Contact the староста"""
-    try:
-        username = next((data['username'] for data in SPECIAL_USERS.values() if data['name'] == 'Староста'), None)
-        if username:
-            await update.message.reply_text(f"👑 <b>Связь со старостой</b>\n\n📞 Telegram: {username}", parse_mode='HTML')
-        else:
-            await update.message.reply_text("❌ Староста не найден")
-    except Exception as e:
-        print(f"ОШИБКА: Ошибка в contact_starosta: {e}")
-
-async def contact_deputy_starosta(update: Update):
-    """Contact the зам старосты"""
-    try:
-        username = next((data['username'] for data in SPECIAL_USERS.values() if data['name'] == 'Зам Старосты (Разработчик)'), None)
-        if username:
-            await update.message.reply_text(f"👑 <b>Связь с замом старосты (разработчиком)</b>\n\n📞 Telegram: {username}", parse_mode='HTML')
-        else:
-            await update.message.reply_text("❌ Зам старосты не найден")
-    except Exception as e:
-        print(f"ОШИБКА: Ошибка в contact_deputy_starosta: {e}")
-
 # -------------------- DELETION FUNCTIONS --------------------
 
 async def delete_homework_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -3280,7 +3485,7 @@ async def delete_homework_menu(update: Update, context: ContextTypes.DEFAULT_TYP
     try:
         user_id = update.effective_user.id
         user_data = get_user(user_id)
-        if not can_delete_homework(user_id):
+        if not can_delete_homework(user_id, user_data['group_name']):
             await update.message.reply_text("❌ У вас нет прав для этого действия.")
             return ConversationHandler.END
             
@@ -3301,7 +3506,7 @@ async def delete_notification_menu(update: Update, context: ContextTypes.DEFAULT
     try:
         user_id = update.effective_user.id
         user_data = get_user(user_id)
-        if not can_delete_notifications(user_id):
+        if not can_delete_notifications(user_id, user_data['group_name']):
             await update.message.reply_text("❌ У вас нет прав для этого действия.")
             return ConversationHandler.END
             
@@ -3333,7 +3538,7 @@ async def delete_sport_notification_menu(update: Update, context: ContextTypes.D
     try:
         user_id = update.effective_user.id
         user_data = get_user(user_id)
-        if not can_delete_sport_notifications(user_id):
+        if not can_delete_sport_notifications(user_id, user_data['group_name']):
             await update.message.reply_text("❌ У вас нет прав для этого действия.")
             return ConversationHandler.END
             
@@ -3365,7 +3570,7 @@ async def delete_user_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("❌ У вас нет прав для этого действия.")
             return ConversationHandler.END
             
-        users = [u for u in get_all_users() if u['user_id'] not in SPECIAL_USERS]
+        users = [u for u in get_all_users() if u['user_id'] != DEVELOPER_ID]
         if not users:
             await update.message.reply_text("👥 Нет пользователей для удаления.")
             return ConversationHandler.END
@@ -3522,29 +3727,6 @@ async def handle_suggestion_response_input(update: Update, context: ContextTypes
         print(f"ОШИБКА: Ошибка в handle_suggestion_response_input: {e}")
         return AWAITING_SUGGESTION_RESPONSE
 
-# -------------------- ROLE FIX FUNCTION --------------------
-
-async def handle_role_fix_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handles the role fix callback"""
-    try:
-        query = update.callback_query
-        await query.answer()
-        
-        parts = query.data.split('_')
-        user_id = int(parts[2])
-        
-        if query.from_user.id != user_id:
-            await query.edit_message_text("❌ Вы не можете исправить роль другого пользователя.")
-            return
-        
-        user = query.from_user
-        add_user(user_id, user.username, user.first_name, user.last_name)
-        
-        await query.edit_message_text("✅ Ваша роль была обновлена! Теперь у вас должны быть все права.")
-        await show_main_menu(update, user_id)
-    except Exception as e:
-        print(f"ОШИБКА: Ошибка в handle_role_fix_callback: {e}")
-
 # -------------------- ROLE ASSIGNMENT SYSTEM --------------------
 
 async def start_role_assignment(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -3578,7 +3760,7 @@ async def start_role_assignment(update: Update, context: ContextTypes.DEFAULT_TY
         keyboard.append([InlineKeyboardButton("❌ Отмена", callback_data="role_cancel")])
         
         await update.message.reply_text(
-            "👑 <b>Назначение ролей</b>\n\n"
+            "👑 <b>Назначение ролей для групп</b>\n\n"
             "Выберите группу для назначения роли:",
             parse_mode='HTML',
             reply_markup=InlineKeyboardMarkup(keyboard)
@@ -3602,84 +3784,24 @@ async def handle_role_group_selection(update: Update, context: ContextTypes.DEFA
         group_name = query.data.replace('role_group_', '')
         context.user_data['role_assignment_group'] = group_name
         
-        # Get users in selected group
-        users_in_group = [user for user in get_all_users() if user['group_name'] == group_name]
-        
-        if not users_in_group:
-            await query.edit_message_text(f"❌ В группе {group_name} нет пользователей.")
-            return ConversationHandler.END
-        
-        # Create keyboard with users (paginated if needed)
-        keyboard = []
-        for user in users_in_group[:50]:  # Limit to 50 users
-            username = f"@{user['username']}" if user['username'] else user['first_name']
-            current_role = user['custom_role_name'] if user['custom_role_name'] else user['role']
-            button_text = f"{user['first_name']} ({username}) - {current_role}"
-            keyboard.append([InlineKeyboardButton(button_text, callback_data=f"role_user_{user['user_id']}")])
-        
-        keyboard.append([InlineKeyboardButton("🔙 Назад к группам", callback_data="role_back_to_groups")])
-        keyboard.append([InlineKeyboardButton("❌ Отмена", callback_data="role_cancel")])
+        # Create role type selection keyboard
+        keyboard = [
+            [InlineKeyboardButton("👑 Староста", callback_data="role_type_starosta")],
+            [InlineKeyboardButton("👑 Зам старосты", callback_data="role_type_deputy_starosta")],
+            [InlineKeyboardButton("🏃 Физорг", callback_data="role_type_physical_organizer")],
+            [InlineKeyboardButton("🔙 Назад к группам", callback_data="role_back_to_groups")],
+            [InlineKeyboardButton("❌ Отмена", callback_data="role_cancel")]
+        ]
         
         await query.edit_message_text(
-            f"👥 <b>Пользователи в группе {group_name}</b>\n\n"
-            "Выберите пользователя для назначения роли:",
+            f"👑 <b>Назначение роли для группы {group_name}</b>\n\n"
+            "Выберите тип роли для назначения:",
             parse_mode='HTML',
             reply_markup=InlineKeyboardMarkup(keyboard)
         )
         return AWAITING_ROLE_ASSIGNMENT
     except Exception as e:
         print(f"ОШИБКА: Ошибка в handle_role_group_selection: {e}")
-        return ConversationHandler.END
-
-async def handle_role_user_selection(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handles user selection for role assignment"""
-    try:
-        query = update.callback_query
-        await query.answer()
-        
-        if query.data == "role_back_to_groups":
-            return await start_role_assignment(update, context)
-        
-        if query.data == "role_cancel":
-            await query.edit_message_text("❌ Назначение роли отменено.")
-            await show_main_menu(update, query.from_user.id)
-            return ConversationHandler.END
-        
-        user_id = int(query.data.replace('role_user_', ''))
-        context.user_data['role_assignment_user_id'] = user_id
-        
-        user_data = get_user(user_id)
-        if not user_data:
-            await query.edit_message_text("❌ Пользователь не найден.")
-            return ConversationHandler.END
-        
-        # Create role selection keyboard
-        keyboard = [
-            [InlineKeyboardButton("👑 Староста", callback_data="role_type_starosta")],
-            [InlineKeyboardButton("👑 Зам старосты", callback_data="role_type_deputy_starosta")],
-            [InlineKeyboardButton("🏃 Физ. орг.", callback_data="role_type_physical_organizer")],
-            [InlineKeyboardButton("🔧 Собственная роль", callback_data="role_type_custom")],
-            [InlineKeyboardButton("🎓 Студент (сброс роли)", callback_data="role_type_student")],
-            [InlineKeyboardButton("🔙 Назад к пользователям", callback_data=f"role_back_to_users_{context.user_data['role_assignment_group']}")],
-            [InlineKeyboardButton("❌ Отмена", callback_data="role_cancel")]
-        ]
-        
-        username = f"@{user_data['username']}" if user_data['username'] else user_data['first_name']
-        current_role = user_data['custom_role_name'] if user_data['custom_role_name'] else user_data['role']
-        
-        await query.edit_message_text(
-            f"👤 <b>Назначение роли для пользователя</b>\n\n"
-            f"<b>Имя:</b> {user_data['first_name']}\n"
-            f"<b>Юзернейм:</b> {username}\n"
-            f"<b>Группа:</b> {user_data['group_name']}\n"
-            f"<b>Текущая роль:</b> {current_role}\n\n"
-            "Выберите роль для назначения:",
-            parse_mode='HTML',
-            reply_markup=InlineKeyboardMarkup(keyboard)
-        )
-        return AWAITING_ROLE_ASSIGNMENT
-    except Exception as e:
-        print(f"ОШИБКА: Ошибка в handle_role_user_selection: {e}")
         return ConversationHandler.END
 
 async def handle_role_type_selection(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -3693,122 +3815,121 @@ async def handle_role_type_selection(update: Update, context: ContextTypes.DEFAU
             await show_main_menu(update, query.from_user.id)
             return ConversationHandler.END
         
-        if query.data.startswith("role_back_to_users_"):
-            group_name = query.data.replace('role_back_to_users_', '')
+        if query.data == "role_back_to_groups":
+            return await start_role_assignment(update, context)
+        
+        role_type = query.data.replace('role_type_', '')
+        group_name = context.user_data['role_assignment_group']
+        
+        # Get current role holder
+        current_role = get_group_role(group_name, role_type)
+        
+        # Get users in selected group
+        users_in_group = [user for user in get_all_users() if user['group_name'] == group_name]
+        
+        if not users_in_group:
+            await query.edit_message_text(f"❌ В группе {group_name} нет пользователей.")
+            return ConversationHandler.END
+        
+        # Create keyboard with users
+        keyboard = []
+        for user in users_in_group:
+            username = f"@{user['username']}" if user['username'] else user['first_name']
+            button_text = f"{user['first_name']} ({username})"
+            if current_role and current_role['user_id'] == user['user_id']:
+                button_text += " ✅"
+            keyboard.append([InlineKeyboardButton(button_text, callback_data=f"role_user_{user['user_id']}_{role_type}")])
+        
+        keyboard.append([InlineKeyboardButton("🔙 Назад к ролям", callback_data=f"role_back_to_types_{group_name}")])
+        keyboard.append([InlineKeyboardButton("❌ Снять роль", callback_data=f"role_remove_{role_type}")])
+        keyboard.append([InlineKeyboardButton("❌ Отмена", callback_data="role_cancel")])
+        
+        role_names = {
+            'starosta': 'Староста',
+            'deputy_starosta': 'Зам старосты',
+            'physical_organizer': 'Физорг'
+        }
+        
+        current_text = ""
+        if current_role:
+            current_text = f"\n\n<b>Текущий {role_names[role_type]}:</b> {current_role['first_name']} (@{current_role['username']})"
+        
+        await query.edit_message_text(
+            f"👑 <b>Назначение {role_names[role_type]} для группы {group_name}</b>\n\n"
+            f"Выберите пользователя для назначения:{current_text}",
+            parse_mode='HTML',
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+        return AWAITING_ROLE_ASSIGNMENT
+    except Exception as e:
+        print(f"ОШИБКА: Ошибка в handle_role_type_selection: {e}")
+        return ConversationHandler.END
+
+async def handle_role_user_selection(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handles user selection for role assignment"""
+    try:
+        query = update.callback_query
+        await query.answer()
+        
+        if query.data.startswith("role_back_to_types_"):
+            group_name = query.data.replace('role_back_to_types_', '')
             context.user_data['role_assignment_group'] = group_name
             return await handle_role_group_selection(update, context)
         
-        user_id = context.user_data['role_assignment_user_id']
+        if query.data.startswith("role_remove_"):
+            role_type = query.data.replace('role_remove_', '')
+            group_name = context.user_data['role_assignment_group']
+            
+            if remove_group_role(group_name, role_type):
+                role_names = {
+                    'starosta': 'Староста',
+                    'deputy_starosta': 'Зам старосты', 
+                    'physical_organizer': 'Физорг'
+                }
+                await query.edit_message_text(f"✅ {role_names[role_type]} для группы {group_name} снят!")
+            else:
+                await query.edit_message_text("❌ Ошибка при снятии роли.")
+            
+            await show_main_menu(update, query.from_user.id)
+            return ConversationHandler.END
+        
+        if query.data == "role_cancel":
+            await query.edit_message_text("❌ Назначение роли отменено.")
+            await show_main_menu(update, query.from_user.id)
+            return ConversationHandler.END
+        
+        parts = query.data.split('_')
+        user_id = int(parts[2])
+        role_type = parts[3]
+        
+        group_name = context.user_data['role_assignment_group']
         user_data = get_user(user_id)
         
         if not user_data:
             await query.edit_message_text("❌ Пользователь не найден.")
             return ConversationHandler.END
         
-        role_type = query.data.replace('role_type_', '')
-        
-        if role_type == 'student':
-            # Reset to student role
-            rights_data = {
-                'role': ROLE_STUDENT,
-                'custom_role_name': None,
-                'can_send_homework': 0,
-                'can_send_notifications': 0,
-                'can_send_sport_notifications': 0,
-                'can_delete_homework': 0,
-                'can_delete_notifications': 0,
-                'can_delete_sport_notifications': 0,
-                'can_delete_suggestions': 0,
-                'can_manage_users': 0
-            }
-            
-            if update_user_rights(user_id, rights_data):
-                await query.edit_message_text(f"✅ Роль пользователя {user_data['first_name']} сброшена до 'Студент'!")
-            else:
-                await query.edit_message_text("❌ Ошибка при сбросе роли.")
-            
-            await show_main_menu(update, query.from_user.id)
-            return ConversationHandler.END
-        
-        elif role_type == 'custom':
-            await query.edit_message_text(
-                "✏️ Введите название собственной роли:",
-                reply_markup=ReplyKeyboardMarkup([['❌ Отмена']], resize_keyboard=True)
-            )
-            return AWAITING_ROLE_ASSIGNMENT
-        
-        else:
-            # Apply predefined role
-            role_name_map = {
+        # Set the role
+        if set_group_role(group_name, role_type, user_id, user_data['username'], user_data['first_name']):
+            role_names = {
                 'starosta': 'Староста',
-                'deputy_starosta': 'Зам Старосты', 
-                'physical_organizer': 'Физ. орг.'
+                'deputy_starosta': 'Зам старосты',
+                'physical_organizer': 'Физорг'
             }
             
-            if add_special_user(
-                user_id,
-                user_data['username'],
-                user_data['first_name'],
-                user_data['last_name'],
-                user_data['group_name'],
-                role_type,
-                role_name_map.get(role_type)
-            ):
-                await query.edit_message_text(f"✅ Пользователю {user_data['first_name']} назначена роль: {role_name_map.get(role_type)}!")
-            else:
-                await query.edit_message_text("❌ Ошибка при назначении роли.")
-            
-            await show_main_menu(update, query.from_user.id)
-            return ConversationHandler.END
-            
-    except Exception as e:
-        print(f"ОШИБКА: Ошибка в handle_role_type_selection: {e}")
-        return ConversationHandler.END
-
-async def handle_custom_role_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handles custom role name input"""
-    try:
-        user_id = update.effective_user.id
-        if user_id != DEVELOPER_ID:
-            await update.message.reply_text("❌ У вас нет прав для этого действия.")
-            return await cancel_conversation(update, context)
-        
-        custom_role_name = update.message.text.strip()
-        
-        if custom_role_name == '❌ Отмена':
-            return await cancel_conversation(update, context)
-        
-        target_user_id = context.user_data['role_assignment_user_id']
-        user_data = get_user(target_user_id)
-        
-        if not user_data:
-            await update.message.reply_text("❌ Пользователь не найден.")
-            return ConversationHandler.END
-        
-        if add_special_user(
-            target_user_id,
-            user_data['username'],
-            user_data['first_name'],
-            user_data['last_name'],
-            user_data['group_name'],
-            'custom',
-            custom_role_name
-        ):
-            await update.message.reply_text(
-                f"✅ Пользователю {user_data['first_name']} назначена роль: {custom_role_name}!",
-                reply_markup=ReplyKeyboardRemove()
+            await query.edit_message_text(
+                f"✅ {role_names[role_type]} для группы {group_name} назначен!\n\n"
+                f"👤 Пользователь: {user_data['first_name']} (@{user_data['username']})"
             )
         else:
-            await update.message.reply_text(
-                "❌ Ошибка при назначении роли.",
-                reply_markup=ReplyKeyboardRemove()
-            )
+            await query.edit_message_text("❌ Ошибка при назначении роли.")
         
-        await show_main_menu(update, user_id)
+        await show_main_menu(update, query.from_user.id)
         return ConversationHandler.END
+            
     except Exception as e:
-        print(f"ОШИБКА: Ошибка в handle_custom_role_name: {e}")
-        return AWAITING_ROLE_ASSIGNMENT
+        print(f"ОШИБКА: Ошибка в handle_role_user_selection: {e}")
+        return ConversationHandler.END
 
 # -------------------- USER RIGHTS MANAGEMENT FUNCTIONS --------------------
 
@@ -3820,23 +3941,29 @@ async def manage_user_rights_menu(update: Update, context: ContextTypes.DEFAULT_
             await update.message.reply_text("❌ У вас нет прав для этого действия.")
             return ConversationHandler.END
         
+        # Группируем пользователей по группам
         users = get_all_users()
-        if not users:
-            await update.message.reply_text("❌ В базе данных нет пользователей.")
-            return ConversationHandler.END
-        
-        keyboard = []
+        groups_dict = {}
         for user in users:
             if user['user_id'] == user_id:
                 continue
                 
-            role_display = user['custom_role_name'] if user['custom_role_name'] else user['role']
-            button_text = f"{user['first_name']} (@{user['username']}) - {role_display}"
-            keyboard.append([InlineKeyboardButton(button_text, callback_data=f"manage_rights_{user['user_id']}")])
+            group_name = user['group_name'] if user['group_name'] else "Без группы"
+            if group_name not in groups_dict:
+                groups_dict[group_name] = []
+            groups_dict[group_name].append(user)
+        
+        if not groups_dict:
+            await update.message.reply_text("❌ В базе данных нет пользователей.")
+            return ConversationHandler.END
+        
+        keyboard = []
+        for group_name, group_users in sorted(groups_dict.items()):
+            keyboard.append([InlineKeyboardButton(f"📚 {group_name} ({len(group_users)} чел.)", callback_data=f"rights_group_{group_name}")])
         
         await update.message.reply_text(
             "👥 <b>Управление правами пользователей</b>\n\n"
-            "Выберите пользователя для изменения прав:",
+            "Выберите группу для управления правами:",
             parse_mode='HTML',
             reply_markup=InlineKeyboardMarkup(keyboard)
         )
@@ -3844,6 +3971,46 @@ async def manage_user_rights_menu(update: Update, context: ContextTypes.DEFAULT_
     except Exception as e:
         print(f"ОШИБКА: Ошибка в manage_user_rights_menu: {e}")
         return ConversationHandler.END
+
+async def handle_user_rights_group_selection(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handles group selection for rights management"""
+    try:
+        query = update.callback_query
+        await query.answer()
+        
+        user_id = query.from_user.id
+        if user_id != DEVELOPER_ID and not can_manage_users(user_id):
+            await query.edit_message_text("❌ У вас нет прав для этого действия.")
+            return
+        
+        group_name = query.data.replace('rights_group_', '')
+        context.user_data['rights_management_group'] = group_name
+        
+        # Get users in selected group
+        users_in_group = [user for user in get_all_users() if user['group_name'] == group_name and user['user_id'] != user_id]
+        
+        if not users_in_group:
+            await query.edit_message_text(f"❌ В группе {group_name} нет других пользователей.")
+            return
+        
+        keyboard = []
+        for user in users_in_group:
+            role_display = get_user_role_display(user['user_id'])
+            button_text = f"{user['first_name']} (@{user['username']}) - {role_display}"
+            keyboard.append([InlineKeyboardButton(button_text, callback_data=f"manage_rights_{user['user_id']}")])
+        
+        keyboard.append([InlineKeyboardButton("🔙 Назад к группам", callback_data="rights_back_to_groups")])
+        
+        await query.edit_message_text(
+            f"👥 <b>Управление правами группы {group_name}</b>\n\n"
+            "Выберите пользователя для изменения прав:",
+            parse_mode='HTML',
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+        return AWAITING_USER_RIGHTS
+    except Exception as e:
+        print(f"ОШИБКА: Ошибка в handle_user_rights_group_selection: {e}")
+        return AWAITING_USER_RIGHTS
 
 async def handle_user_rights_selection(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handles user selection for rights management"""
@@ -3855,6 +4022,9 @@ async def handle_user_rights_selection(update: Update, context: ContextTypes.DEF
         if user_id != DEVELOPER_ID and not can_manage_users(user_id):
             await query.edit_message_text("❌ У вас нет прав для этого действия.")
             return
+        
+        if query.data == "rights_back_to_groups":
+            return await manage_user_rights_menu(update, context)
         
         parts = query.data.split('_')
         target_user_id = int(parts[2])
@@ -3875,24 +4045,27 @@ async def handle_user_rights_selection(update: Update, context: ContextTypes.DEF
             [InlineKeyboardButton(f"{'✅' if target_user['can_send_homework'] else '❌'} Отправка ДЗ", callback_data=f"toggle_homework_{target_user_id}")],
             [InlineKeyboardButton(f"{'✅' if target_user['can_send_notifications'] else '❌'} Отправка уведомлений", callback_data=f"toggle_notifications_{target_user_id}")],
             [InlineKeyboardButton(f"{'✅' if target_user['can_send_sport_notifications'] else '❌'} Спортивные уведомления", callback_data=f"toggle_sport_{target_user_id}")],
+            [InlineKeyboardButton(f"{'✅' if target_user['can_send_global_notifications'] else '❌'} Глобальные уведомления", callback_data=f"toggle_global_{target_user_id}")],
             [InlineKeyboardButton(f"{'✅' if target_user['can_delete_homework'] else '❌'} Удаление ДЗ", callback_data=f"toggle_del_homework_{target_user_id}")],
             [InlineKeyboardButton(f"{'✅' if target_user['can_delete_notifications'] else '❌'} Удаление уведомлений", callback_data=f"toggle_del_notifications_{target_user_id}")],
             [InlineKeyboardButton(f"{'✅' if target_user['can_delete_sport_notifications'] else '❌'} Удаление спортивных", callback_data=f"toggle_del_sport_{target_user_id}")],
             [InlineKeyboardButton(f"{'✅' if target_user['can_delete_suggestions'] else '❌'} Удаление предложений", callback_data=f"toggle_del_suggestions_{target_user_id}")],
             [InlineKeyboardButton(f"{'✅' if target_user['can_manage_users'] else '❌'} Управление пользователями", callback_data=f"toggle_manage_users_{target_user_id}")],
-            [InlineKeyboardButton("🔙 Назад к списку", callback_data="back_to_users_list")],
+            [InlineKeyboardButton("✏️ Собственная роль", callback_data=f"custom_role_{target_user_id}")],
+            [InlineKeyboardButton("🔙 Назад к списку", callback_data=f"rights_back_to_users_{context.user_data['rights_management_group']}")],
             [InlineKeyboardButton("❌ Сбросить все права", callback_data=f"reset_rights_{target_user_id}")],
             [InlineKeyboardButton("✅ Сохранить и выйти", callback_data="save_rights")]
         ]
         
-        role_display = target_user['custom_role_name'] if target_user['custom_role_name'] else target_user['role']
+        role_display = get_user_role_display(target_user_id)
         
         await query.edit_message_text(
             f"👤 <b>Управление правами пользователя</b>\n\n"
             f"<b>Имя:</b> {target_user['first_name']}\n"
             f"<b>Юзернейм:</b> @{target_user['username']}\n"
             f"<b>Группа:</b> {target_user['group_name']}\n"
-            f"<b>Роль:</b> {role_display}\n\n"
+            f"<b>Роль:</b> {role_display}\n"
+            f"<b>ID:</b> <code>{target_user['user_id']}</code>\n\n"
             f"<b>Текущие права:</b>\n"
             f"Нажмите на право для его изменения:",
             parse_mode='HTML',
@@ -3914,13 +4087,27 @@ async def handle_rights_toggle(update: Update, context: ContextTypes.DEFAULT_TYP
             await query.edit_message_text("❌ У вас нет прав для этого действия.")
             return
         
-        if query.data == "back_to_users_list":
-            return await manage_user_rights_menu(update, context)
-        
         if query.data == "save_rights":
             await query.edit_message_text("✅ Права сохранены!")
             await show_main_menu(update, user_id)
             return ConversationHandler.END
+        
+        if query.data.startswith("rights_back_to_users_"):
+            group_name = query.data.replace('rights_back_to_users_', '')
+            context.user_data['rights_management_group'] = group_name
+            return await handle_user_rights_group_selection(update, context)
+        
+        if query.data.startswith("custom_role_"):
+            target_user_id = int(query.data.replace('custom_role_', ''))
+            context.user_data['custom_role_user_id'] = target_user_id
+            
+            await query.edit_message_text(
+                "✏️ <b>Установка собственной роли</b>\n\n"
+                "Введите название роли для пользователя:",
+                parse_mode='HTML',
+                reply_markup=ReplyKeyboardMarkup([['❌ Отмена']], resize_keyboard=True)
+            )
+            return AWAITING_USER_RIGHTS
         
         parts = query.data.split('_')
         
@@ -3950,6 +4137,7 @@ async def handle_rights_toggle(update: Update, context: ContextTypes.DEFAULT_TYP
             'can_send_homework': target_user['can_send_homework'],
             'can_send_notifications': target_user['can_send_notifications'],
             'can_send_sport_notifications': target_user['can_send_sport_notifications'],
+            'can_send_global_notifications': target_user['can_send_global_notifications'],
             'can_delete_homework': target_user['can_delete_homework'],
             'can_delete_notifications': target_user['can_delete_notifications'],
             'can_delete_sport_notifications': target_user['can_delete_sport_notifications'],
@@ -3974,6 +4162,8 @@ async def handle_rights_toggle(update: Update, context: ContextTypes.DEFAULT_TYP
                 rights_data['can_send_notifications'] = 1 - rights_data['can_send_notifications']
             elif action == "sport":
                 rights_data['can_send_sport_notifications'] = 1 - rights_data['can_send_sport_notifications']
+            elif action == "global":
+                rights_data['can_send_global_notifications'] = 1 - rights_data['can_send_global_notifications']
             elif action == "del_homework":
                 rights_data['can_delete_homework'] = 1 - rights_data['can_delete_homework']
             elif action == "del_notifications":
@@ -3993,17 +4183,19 @@ async def handle_rights_toggle(update: Update, context: ContextTypes.DEFAULT_TYP
                 [InlineKeyboardButton(f"{'✅' if updated_user['can_send_homework'] else '❌'} Отправка ДЗ", callback_data=f"toggle_homework_{target_user_id}")],
                 [InlineKeyboardButton(f"{'✅' if updated_user['can_send_notifications'] else '❌'} Отправка уведомлений", callback_data=f"toggle_notifications_{target_user_id}")],
                 [InlineKeyboardButton(f"{'✅' if updated_user['can_send_sport_notifications'] else '❌'} Спортивные уведомления", callback_data=f"toggle_sport_{target_user_id}")],
+                [InlineKeyboardButton(f"{'✅' if updated_user['can_send_global_notifications'] else '❌'} Глобальные уведомления", callback_data=f"toggle_global_{target_user_id}")],
                 [InlineKeyboardButton(f"{'✅' if updated_user['can_delete_homework'] else '❌'} Удаление ДЗ", callback_data=f"toggle_del_homework_{target_user_id}")],
                 [InlineKeyboardButton(f"{'✅' if updated_user['can_delete_notifications'] else '❌'} Удаление уведомлений", callback_data=f"toggle_del_notifications_{target_user_id}")],
                 [InlineKeyboardButton(f"{'✅' if updated_user['can_delete_sport_notifications'] else '❌'} Удаление спортивных", callback_data=f"toggle_del_sport_{target_user_id}")],
                 [InlineKeyboardButton(f"{'✅' if updated_user['can_delete_suggestions'] else '❌'} Удаление предложений", callback_data=f"toggle_del_suggestions_{target_user_id}")],
                 [InlineKeyboardButton(f"{'✅' if updated_user['can_manage_users'] else '❌'} Управление пользователями", callback_data=f"toggle_manage_users_{target_user_id}")],
-                [InlineKeyboardButton("🔙 Назад к списку", callback_data="back_to_users_list")],
+                [InlineKeyboardButton("✏️ Собственная роль", callback_data=f"custom_role_{target_user_id}")],
+                [InlineKeyboardButton("🔙 Назад к списку", callback_data=f"rights_back_to_users_{context.user_data['rights_management_group']}")],
                 [InlineKeyboardButton("❌ Сбросить все права", callback_data=f"reset_rights_{target_user_id}")],
                 [InlineKeyboardButton("✅ Сохранить и выйти", callback_data="save_rights")]
             ]
             
-            role_display = updated_user['custom_role_name'] if updated_user['custom_role_name'] else updated_user['role']
+            role_display = get_user_role_display(target_user_id)
             
             await query.edit_message_text(
                 f"👤 <b>Управление правами пользователя</b>\n\n"
@@ -4022,6 +4214,58 @@ async def handle_rights_toggle(update: Update, context: ContextTypes.DEFAULT_TYP
     except Exception as e:
         print(f"ОШИБКА: Ошибка в handle_rights_toggle: {e}")
         await query.edit_message_text("❌ Произошла ошибка при обновлении прав.")
+
+async def handle_custom_role_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handles custom role name input"""
+    try:
+        user_id = update.effective_user.id
+        if user_id != DEVELOPER_ID and not can_manage_users(user_id):
+            await update.message.reply_text("❌ У вас нет прав для этого действия.")
+            return await cancel_conversation(update, context)
+        
+        custom_role_name = update.message.text.strip()
+        
+        if custom_role_name == '❌ Отмена':
+            return await handle_user_rights_selection(update, context)
+        
+        target_user_id = context.user_data['custom_role_user_id']
+        target_user = get_user(target_user_id)
+        
+        if not target_user:
+            await update.message.reply_text("❌ Пользователь не найден.")
+            return ConversationHandler.END
+        
+        # Update user with custom role
+        rights_data = {
+            'role': ROLE_CUSTOM,
+            'custom_role_name': custom_role_name,
+            'can_send_homework': target_user['can_send_homework'],
+            'can_send_notifications': target_user['can_send_notifications'],
+            'can_send_sport_notifications': target_user['can_send_sport_notifications'],
+            'can_send_global_notifications': target_user['can_send_global_notifications'],
+            'can_delete_homework': target_user['can_delete_homework'],
+            'can_delete_notifications': target_user['can_delete_notifications'],
+            'can_delete_sport_notifications': target_user['can_delete_sport_notifications'],
+            'can_delete_suggestions': target_user['can_delete_suggestions'],
+            'can_manage_users': target_user['can_manage_users']
+        }
+        
+        if update_user_rights(target_user_id, rights_data):
+            await update.message.reply_text(
+                f"✅ Пользователю {target_user['first_name']} установлена роль: {custom_role_name}!",
+                reply_markup=ReplyKeyboardRemove()
+            )
+        else:
+            await update.message.reply_text(
+                "❌ Ошибка при установке роли.",
+                reply_markup=ReplyKeyboardRemove()
+            )
+        
+        await show_main_menu(update, user_id)
+        return ConversationHandler.END
+    except Exception as e:
+        print(f"ОШИБКА: Ошибка в handle_custom_role_input: {e}")
+        return AWAITING_USER_RIGHTS
 
 # -------------------- JOB QUEUE FUNCTIONS --------------------
 
@@ -4089,16 +4333,19 @@ def main():
                 AWAITING_GLOBAL_NOTIFICATION: [MessageHandler(filters.TEXT | filters.PHOTO | filters.VIDEO | filters.Document.ALL, handle_global_notification_input)],
                 AWAITING_ROLE_ASSIGNMENT: [
                     CallbackQueryHandler(handle_role_group_selection, pattern='^role_group_'),
-                    CallbackQueryHandler(handle_role_user_selection, pattern='^role_user_'),
                     CallbackQueryHandler(handle_role_type_selection, pattern='^role_type_'),
-                    CallbackQueryHandler(handle_role_group_selection, pattern='^role_back_to_users_'),
+                    CallbackQueryHandler(handle_role_user_selection, pattern='^role_user_'),
+                    CallbackQueryHandler(handle_role_type_selection, pattern='^role_back_to_types_'),
                     CallbackQueryHandler(handle_role_group_selection, pattern='^role_back_to_groups'),
+                    CallbackQueryHandler(handle_role_user_selection, pattern='^role_remove_'),
                     CallbackQueryHandler(start_role_assignment, pattern='^role_cancel$'),
-                    MessageHandler(filters.TEXT & ~filters.COMMAND, handle_custom_role_name)
                 ],
                 AWAITING_USER_RIGHTS: [
+                    CallbackQueryHandler(handle_user_rights_group_selection, pattern='^rights_group_'),
                     CallbackQueryHandler(handle_user_rights_selection, pattern='^manage_rights_'),
-                    CallbackQueryHandler(handle_rights_toggle, pattern='^(toggle_|reset_|back_|save_)')
+                    CallbackQueryHandler(handle_rights_toggle, pattern='^(toggle_|reset_|rights_back_|save_)'),
+                    CallbackQueryHandler(handle_user_rights_group_selection, pattern='^rights_back_to_users_'),
+                    MessageHandler(filters.TEXT & ~filters.COMMAND, handle_custom_role_input)
                 ],
                 AWAITING_NOTIFICATION_SETTINGS: [
                     CallbackQueryHandler(handle_notification_settings_callback, pattern='^(toggle_|done_)')
@@ -4118,7 +4365,6 @@ def main():
         )
         
         app.add_handler(conv_handler)
-        app.add_handler(CallbackQueryHandler(handle_role_fix_callback, pattern='^fix_role_'))
         app.add_handler(CallbackQueryHandler(handle_suggestion_response_callback, pattern='^respond_'))
         app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_simple_message))
         
