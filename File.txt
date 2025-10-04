@@ -3469,12 +3469,15 @@ async def show_suggestions(update: Update):
                 )
     except Exception as e:
         print(f"ОШИБКА: Ошибка в show_suggestions: {e}")
-
 async def show_users_list(update: Update):
     """Shows a list of all users grouped by groups"""
     try:
-        # Получаем всех пользователей и группируем по реальным группам из базы
         users = get_all_users()
+        if not users:
+            await update.message.reply_text("❌ В базе данных нет пользователей.")
+            return
+        
+        # Группируем пользователей по группам
         groups_dict = {}
         for user in users:
             group_name = user['group_name'] if user['group_name'] else "Без группы"
@@ -3482,22 +3485,48 @@ async def show_users_list(update: Update):
                 groups_dict[group_name] = []
             groups_dict[group_name].append(user)
         
-        if not groups_dict:
-            await update.message.reply_text("❌ В базе данных нет пользователей.")
-            return
+        user_list_text = "👥 <b>Список всех пользователей по группам</b>\n\n"
         
-        # Создаем клавиатуру со всеми группами из базы (не только из ALL_GROUPS)
-        keyboard = []
-        for group_name in sorted(groups_dict.keys()):
-            user_count = len(groups_dict[group_name])
-            keyboard.append([InlineKeyboardButton(f"📚 {group_name} ({user_count} чел.)", callback_data=f"show_users_{group_name}")])
+        for group_name, group_users in sorted(groups_dict.items()):
+            user_list_text += f"<b>📚 Группа: {group_name}</b> ({len(group_users)} чел.)\n"
+            
+            for user in group_users:
+                username = user['username'] if user['username'] else "Нет юзернейма"
+                role_display = get_user_role_display(user['user_id'])
+                
+                user_list_text += (
+                    f"  👤 <b>Имя:</b> {user['first_name']}\n"
+                    f"  🆔 <b>ID:</b> <code>{user['user_id']}</code>\n"
+                    f"  👨‍💼 <b>Роль:</b> {role_display}\n"
+                    f"  📱 <b>Юзер:</b> @{username}\n\n"
+                )
+            
+            user_list_text += "\n"
         
-        await update.message.reply_text(
-            "👥 <b>Список пользователей по группам</b>\n\n"
-            "Выберите группу для просмотра пользователей:",
-            parse_mode='HTML',
-            reply_markup=InlineKeyboardMarkup(keyboard)
-        )
+        # Разбиваем сообщение на части если оно слишком длинное
+        if len(user_list_text) > 4000:
+            parts = []
+            current_part = ""
+            sections = user_list_text.split('\n\n')
+            
+            for section in sections:
+                if len(current_part + section + '\n\n') > 4000:
+                    parts.append(current_part)
+                    current_part = section + '\n\n'
+                else:
+                    current_part += section + '\n\n'
+            
+            if current_part:
+                parts.append(current_part)
+            
+            for i, part in enumerate(parts):
+                await update.message.reply_text(
+                    f"{part}\n<b>Часть {i+1}/{len(parts)}</b>", 
+                    parse_mode='HTML'
+                )
+        else:
+            await update.message.reply_text(user_list_text, parse_mode='HTML')
+            
     except Exception as e:
         print(f"ОШИБКА: Ошибка в show_users_list: {e}")
         await update.message.reply_text("❌ Произошла ошибка при загрузке списка пользователей.")
