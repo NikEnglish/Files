@@ -1,7 +1,3 @@
-ОШИБКА: Ошибка базы данных при получения списка пользователей: no such column: custom_role_name
-ОШИБКА: Ошибка базы данных при получения списка пользователей: no such column: custom_role_name
-ЛОГ: Пользователь Имя (ID: 1775957387) отправил сообщение: 'Список пользователей'
-ОШИБКА: Ошибка базы данных при получения списка пользователей: no such column: custom_role_name
 import sqlite3
 import re
 import json
@@ -1167,11 +1163,7 @@ def can_delete_suggestions(user_id):
     if not user: return False
     
     # Разработчик может всё
-    if user_id == DEVELOPER_ID:
-        return True
-    
-    # Проверяем права пользователя
-    return user['can_delete_suggestions'] == 1
+    return user_id == DEVELOPER_ID
 
 def can_manage_users(user_id):
     """Checks if user can manage users"""
@@ -2579,7 +2571,8 @@ async def handle_simple_message(update: Update, context: ContextTypes.DEFAULT_TY
             await manage_user_rights_menu(update, context)
 
         else:
-            await update.message.reply_text("Используй кнопки для навигации 👇")
+            # Пересылаем сообщение разработчику, если оно не обработано
+            await forward_message_to_developer(update, context)
     
     except Exception as e:
         print(f"ОШИБКА: Ошибка в handle_simple_message: {e}")
@@ -2590,6 +2583,44 @@ async def handle_simple_message(update: Update, context: ContextTypes.DEFAULT_TY
             )
         except:
             pass
+
+async def forward_message_to_developer(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Пересылает сообщение разработчику"""
+    try:
+        user = update.effective_user
+        user_id = user.id
+        text = update.message.text
+        
+        user_data = get_user(user_id)
+        group_name = user_data['group_name'] if user_data and user_data['group_name'] else "Не установлена"
+        
+        # Формируем сообщение для разработчика
+        message_to_developer = (
+            f"📩 <b>Новое сообщение от пользователя</b>\n\n"
+            f"👤 <b>Пользователь:</b> {user.first_name}\n"
+            f"🆔 <b>ID:</b> <code>{user_id}</code>\n"
+            f"📱 <b>Username:</b> @{user.username if user.username else 'не установлен'}\n"
+            f"📚 <b>Группа:</b> {group_name}\n"
+            f"💬 <b>Сообщение:</b> {text}"
+        )
+        
+        # Отправляем сообщение разработчику
+        await context.bot.send_message(
+            DEVELOPER_ID,
+            message_to_developer,
+            parse_mode='HTML'
+        )
+        
+        # Уведомляем пользователя
+        await update.message.reply_text(
+            "✅ Ваше сообщение было переслано разработчику. Спасибо за обращение!",
+            reply_markup=ReplyKeyboardRemove()
+        )
+        
+        print(f"ЛОГ: Сообщение от пользователя {user_id} переслано разработчику")
+        
+    except Exception as e:
+        print(f"ОШИБКА: Не удалось переслать сообщение разработчику: {e}")
 
 # -------------------- SCHEDULE DISPLAY FUNCTIONS --------------------
 
@@ -3032,50 +3063,47 @@ async def handle_suggestion_input(update: Update, context: ContextTypes.DEFAULT_
                 for media_item in media_collection:
                     add_suggestion_media(suggestion_id, media_item['type'], media_item['id'], media_item.get('caption'))
             
-            # Отправляем уведомление пользователям с правами управления
-            special_users = [u for u in get_all_users() if can_delete_suggestions(u['user_id'])]
-            
-            for special_user in special_users:
-                try:
-                    if media_collection:
-                        for media_item in media_collection:
-                            if media_item['type'] == 'photo':
-                                await context.bot.send_photo(
-                                    chat_id=special_user['user_id'],
-                                    photo=media_item['id'],
-                                    caption=f"💡 Новое предложение от {user_data['first_name']} (@{user_data['username']}):\n\n{suggestion_text}",
-                                    reply_markup=InlineKeyboardMarkup([
-                                        [InlineKeyboardButton("💬 Ответить", callback_data=f"respond_{suggestion_id}")]
-                                    ])
-                                )
-                            elif media_item['type'] == 'video':
-                                await context.bot.send_video(
-                                    chat_id=special_user['user_id'],
-                                    video=media_item['id'],
-                                    caption=f"💡 Новое предложение от {user_data['first_name']} (@{user_data['username']}):\n\n{suggestion_text}",
-                                    reply_markup=InlineKeyboardMarkup([
-                                        [InlineKeyboardButton("💬 Ответить", callback_data=f"respond_{suggestion_id}")]
-                                    ])
-                                )
-                            elif media_item['type'] == 'document':
-                                await context.bot.send_document(
-                                    chat_id=special_user['user_id'],
-                                    document=media_item['id'],
-                                    caption=f"💡 Новое предложение от {user_data['first_name']} (@{user_data['username']}):\n\n{suggestion_text}",
-                                    reply_markup=InlineKeyboardMarkup([
-                                        [InlineKeyboardButton("💬 Ответить", callback_data=f"respond_{suggestion_id}")]
-                                    ])
-                                )
-                    else:
-                        await context.bot.send_message(
-                            special_user['user_id'],
-                            f"💡 Новое предложение от {user_data['first_name']} (@{user_data['username']}):\n\n{suggestion_text}",
-                            reply_markup=InlineKeyboardMarkup([
-                                [InlineKeyboardButton("💬 Ответить", callback_data=f"respond_{suggestion_id}")]
-                            ])
-                        )
-                except Exception as e:
-                    print(f"Не удалось отправить предложение пользователю {special_user['user_id']}: {e}")
+            # Отправляем уведомление только разработчику
+            try:
+                if media_collection:
+                    for media_item in media_collection:
+                        if media_item['type'] == 'photo':
+                            await context.bot.send_photo(
+                                chat_id=DEVELOPER_ID,
+                                photo=media_item['id'],
+                                caption=f"💡 Новое предложение от {user_data['first_name']} (@{user_data['username']}):\n\n{suggestion_text}",
+                                reply_markup=InlineKeyboardMarkup([
+                                    [InlineKeyboardButton("💬 Ответить", callback_data=f"respond_{suggestion_id}")]
+                                ])
+                            )
+                        elif media_item['type'] == 'video':
+                            await context.bot.send_video(
+                                chat_id=DEVELOPER_ID,
+                                video=media_item['id'],
+                                caption=f"💡 Новое предложение от {user_data['first_name']} (@{user_data['username']}):\n\n{suggestion_text}",
+                                reply_markup=InlineKeyboardMarkup([
+                                    [InlineKeyboardButton("💬 Ответить", callback_data=f"respond_{suggestion_id}")]
+                                ])
+                            )
+                        elif media_item['type'] == 'document':
+                            await context.bot.send_document(
+                                chat_id=DEVELOPER_ID,
+                                document=media_item['id'],
+                                caption=f"💡 Новое предложение от {user_data['first_name']} (@{user_data['username']}):\n\n{suggestion_text}",
+                                reply_markup=InlineKeyboardMarkup([
+                                    [InlineKeyboardButton("💬 Ответить", callback_data=f"respond_{suggestion_id}")]
+                                ])
+                            )
+                else:
+                    await context.bot.send_message(
+                        DEVELOPER_ID,
+                        f"💡 Новое предложение от {user_data['first_name']} (@{user_data['username']}):\n\n{suggestion_text}",
+                        reply_markup=InlineKeyboardMarkup([
+                            [InlineKeyboardButton("💬 Ответить", callback_data=f"respond_{suggestion_id}")]
+                        ])
+                    )
+            except Exception as e:
+                print(f"Не удалось отправить предложение разработчику: {e}")
             
             await update.message.reply_text("✅ Спасибо за предложение! Мы его рассмотрим.", reply_markup=ReplyKeyboardRemove())
             
@@ -3505,8 +3533,13 @@ async def show_information(update: Update, group_name: str, role: str):
         print(f"ОШИБКА: Ошибка в show_information: {e}")
 
 async def show_suggestions(update: Update):
-    """Shows suggestions from students"""
+    """Shows suggestions from students (только для разработчика)"""
     try:
+        user_id = update.effective_user.id
+        if user_id != DEVELOPER_ID:
+            await update.message.reply_text("❌ У вас нет прав для просмотра предложений.")
+            return
+            
         suggestions = get_suggestions()
         if not suggestions:
             await update.message.reply_text("📭 Пока нет предложений от учеников")
@@ -3855,17 +3888,25 @@ async def handle_delete_callback(update: Update, context: ContextTypes.DEFAULT_T
 # -------------------- SUGGESTION RESPONSE FUNCTION --------------------
 
 async def handle_suggestion_response_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handles the suggestion response callback"""
+    """Handles the suggestion response callback (только для разработчика)"""
     try:
         query = update.callback_query
         await query.answer()
+        
+        user_id = query.from_user.id
+        if user_id != DEVELOPER_ID:
+            await query.answer("❌ У вас нет прав для ответа на предложения.", show_alert=True)
+            return
         
         parts = query.data.split('_')
         suggestion_id = int(parts[1])
         
         context.user_data['responding_to_suggestion'] = suggestion_id
         
-        await query.edit_message_text(
+        # Убираем инлайн-клавиатуру из сообщения
+        await query.edit_message_reply_markup(reply_markup=None)
+        
+        await query.message.reply_text(
             "💬 <b>Ответ на предложение</b>\n\nНапиши свой ответ:",
             parse_mode='HTML',
             reply_markup=ReplyKeyboardMarkup([['❌ Отмена']], resize_keyboard=True)
@@ -3877,10 +3918,14 @@ async def handle_suggestion_response_callback(update: Update, context: ContextTy
         return ConversationHandler.END
 
 async def handle_suggestion_response_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handles the suggestion response input"""
+    """Handles the suggestion response input (только для разработчика)"""
     try:
         user_id = update.effective_user.id
         user_data = get_user(user_id)
+        
+        if user_id != DEVELOPER_ID:
+            await update.message.reply_text("❌ У вас нет прав для этого действия.")
+            return await cancel_conversation(update, context)
         
         is_blocked, block_duration = check_spam(user_id)
         if is_blocked:
