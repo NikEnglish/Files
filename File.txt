@@ -2971,13 +2971,34 @@ async def show_main_menu(update: Update, user_id: int):
         elif user_data['custom_role_name']:
             welcome_text = f"🔧 Добро пожаловать, {user_data['custom_role_name']}!"
 
-        # Всегда используем группированное меню
+        # Базовое меню для всех пользователей
         keyboard = [
             ['📅 Расписание', '📝 ДЗ', 'ℹ️ Информация'],
             ['💡 Предложить идею', '💰 Дать денюжку', '🔔 Расписание звонков'],
-            ['📞 Связь', '🗑️ Удаление', '📤 Отправка'],
-            ['🎂 Установить день рождения', '🎓 Сменить группу', '🔧 Настройки']
+            ['📞 Связь', '🎂 Установить день рождения', '🎓 Сменить группу'],
+            ['🔧 Настройки']
         ]
+        
+        # Добавляем кнопки отправки и удаления только если есть права
+        has_send_rights = (can_send_homework(user_id, group_name) or 
+                          can_send_notifications(user_id, group_name) or 
+                          can_send_sport_notifications(user_id, group_name) or 
+                          can_send_global_notifications(user_id) or 
+                          can_create_events(user_id, group_name))
+        
+        has_delete_rights = (can_delete_homework(user_id, group_name) or 
+                            can_delete_notifications(user_id, group_name) or 
+                            can_delete_sport_notifications(user_id, group_name) or 
+                            can_delete_suggestions(user_id))
+        
+        # Вставляем кнопки отправки и удаления после первой строки
+        if has_send_rights or has_delete_rights:
+            new_row = []
+            if has_send_rights:
+                new_row.append('📤 Отправка')
+            if has_delete_rights:
+                new_row.append('🗑️ Удаление')
+            keyboard.insert(2, new_row)
         
         # Добавляем кнопки для разработчика
         if user_id == DEVELOPER_ID:
@@ -3033,7 +3054,7 @@ async def show_contact_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         print(f"ОШИБКА: Ошибка в show_contact_menu: {e}")
 
 async def show_send_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Shows send menu"""
+    """Shows send menu based on user rights"""
     try:
         user_id = update.effective_user.id
         user_data = get_user(user_id)
@@ -3041,6 +3062,7 @@ async def show_send_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         keyboard = []
         
+        # Проверяем права и добавляем соответствующие кнопки
         if can_send_homework(user_id, group_name):
             keyboard.append(['📚 Отправить ДЗ'])
         if can_send_notifications(user_id, group_name):
@@ -3051,6 +3073,11 @@ async def show_send_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
             keyboard.append(['🌍 Отправить всем группам'])
         if can_create_events(user_id, group_name):
             keyboard.append(['📅 Создать событие'])
+        
+        # Если нет никаких прав на отправку
+        if not keyboard:
+            await update.message.reply_text("❌ У вас нет прав для отправки.")
+            return
             
         keyboard.append(['🔙 Назад'])
         
@@ -3061,7 +3088,7 @@ async def show_send_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         print(f"ОШИБКА: Ошибка в show_send_menu: {e}")
 
 async def show_delete_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Shows delete menu"""
+    """Shows delete menu based on user rights"""
     try:
         user_id = update.effective_user.id
         user_data = get_user(user_id)
@@ -3069,6 +3096,7 @@ async def show_delete_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         keyboard = []
         
+        # Проверяем права и добавляем соответствующие кнопки
         if can_delete_homework(user_id, group_name):
             keyboard.append(['🗑️ Удалить ДЗ'])
         if can_delete_notifications(user_id, group_name):
@@ -3079,6 +3107,11 @@ async def show_delete_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
             keyboard.append(['🗑️ Удалить предложения'])
         if user_id == DEVELOPER_ID:
             keyboard.append(['🗑️ Удалить пользователя'])
+        
+        # Если нет никаких прав на удаление
+        if not keyboard:
+            await update.message.reply_text("❌ У вас нет прав для удаления.")
+            return
             
         keyboard.append(['🔙 Назад'])
         
