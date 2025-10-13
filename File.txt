@@ -17,7 +17,7 @@ YEKATERINBURG_TZ = timezone(timedelta(hours=5))
 DEFAULT_GROUP = None
 
 # States for ConversationHandler - УВЕЛИЧИВАЕМ КОЛИЧЕСТВО СОСТОЯНИЙ
-AWAITING_HOMEWORK, AWAITING_INFO, AWAITING_SPORT, AWAITING_SUGGESTION, AWAITING_HOMEWORK_DELETE, AWAITING_INFO_DELETE, AWAITING_SPORT_DELETE, AWAITING_USER_DELETE, AWAITING_SUGGESTION_DELETE, AWAITING_GROUP, AWAITING_SUGGESTION_RESPONSE, AWAITING_BIRTHDAY, AWAITING_GLOBAL_NOTIFICATION, AWAITING_ADD_SPECIAL_USER, AWAITING_USER_RIGHTS, AWAITING_ROLE_ASSIGNMENT, AWAITING_NOTIFICATION_SETTINGS, AWAITING_CUSTOM_ROLE, AWAITING_EVENT, AWAITING_EVENT_BUTTONS = range(20)
+AWAITING_HOMEWORK, AWAITING_INFO, AWAITING_SPORT, AWAITING_SUGGESTION, AWAITING_HOMEWORK_DELETE, AWAITING_INFO_DELETE, AWAITING_SPORT_DELETE, AWAITING_USER_DELETE, AWAITING_SUGGESTION_DELETE, AWAITING_GROUP, AWAITING_SUGGESTION_RESPONSE, AWAITING_BIRTHDAY, AWAITING_GLOBAL_NOTIFICATION, AWAITING_ADD_SPECIAL_USER, AWAITING_USER_RIGHTS, AWAITING_ROLE_ASSIGNMENT, AWAITING_NOTIFICATION_SETTINGS, AWAITING_CUSTOM_ROLE, AWAITING_EVENT, AWAITING_EVENT_BUTTONS = range(21)
 
 # User Roles
 ROLE_STUDENT = 'student'
@@ -1344,6 +1344,23 @@ def get_user_role_display(user_id):
     }
     
     return role_map.get(user['role'], "Студент")
+
+# -------------------- NEW RIGHTS CHECK FUNCTIONS --------------------
+
+def has_any_send_right(user_id, group_name=None):
+    """Проверяет, есть ли у пользователя хотя бы одно право на отправку"""
+    return (can_send_homework(user_id, group_name) or 
+            can_send_notifications(user_id, group_name) or 
+            can_send_sport_notifications(user_id, group_name) or 
+            can_send_global_notifications(user_id) or 
+            can_create_events(user_id, group_name))
+
+def has_any_delete_right(user_id, group_name=None):
+    """Проверяет, есть ли у пользователя хотя бы одно право на удаление"""
+    return (can_delete_homework(user_id, group_name) or 
+            can_delete_notifications(user_id, group_name) or 
+            can_delete_sport_notifications(user_id, group_name) or 
+            can_delete_suggestions(user_id))
 
 # -------------------- CONTACT FUNCTIONS --------------------
 
@@ -2971,17 +2988,27 @@ async def show_main_menu(update: Update, user_id: int):
         elif user_data['custom_role_name']:
             welcome_text = f"🔧 Добро пожаловать, {user_data['custom_role_name']}!"
 
-        # Всегда используем группированное меню
+        # Базовые кнопки для всех пользователей
         keyboard = [
             ['📅 Расписание', '📝 ДЗ', 'ℹ️ Информация'],
             ['💡 Предложить идею', '💰 Дать денюжку', '🔔 Расписание звонков'],
-            ['📞 Связь', '🗑️ Удаление', '📤 Отправка'],
-            ['🎂 Установить день рождения', '🎓 Сменить группу', '🔧 Настройки']
         ]
-        
-        # Добавляем кнопки для разработчика
+
+        # Кнопки отправки (только для тех, у кого есть права)
+        if has_any_send_right(user_id, group_name):
+            keyboard.append(['📤 Отправка'])
+
+        # Кнопки удаления (только для тех, у кого есть права)
+        if has_any_delete_right(user_id, group_name):
+            keyboard.append(['🗑️ Удаление'])
+
+        # Общие кнопки
+        keyboard.append(['📞 Связь', '🎂 Установить день рождения', '🎓 Сменить группу'])
+        keyboard.append(['🔧 Настройки'])
+
+        # Кнопки только для разработчика
         if user_id == DEVELOPER_ID:
-            keyboard.append(['📦 Резервная копия', '👑 Назначить роль', '🔧 Управление правами', '💡 Просмотр предложений'])
+            keyboard.append(['📦 Резервная копия', '👑 Назначить роль', '🔧 Управление правами', '💡 Просмотр предложений', '👥 Список пользователей'])
 
         reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
         
@@ -3033,7 +3060,7 @@ async def show_contact_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         print(f"ОШИБКА: Ошибка в show_contact_menu: {e}")
 
 async def show_send_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Shows send menu"""
+    """Shows send menu only for users with send rights"""
     try:
         user_id = update.effective_user.id
         user_data = get_user(user_id)
@@ -3052,6 +3079,10 @@ async def show_send_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if can_create_events(user_id, group_name):
             keyboard.append(['📅 Создать событие'])
             
+        if not keyboard:
+            await update.message.reply_text("❌ У вас нет прав для отправки.")
+            return
+            
         keyboard.append(['🔙 Назад'])
         
         reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
@@ -3061,7 +3092,7 @@ async def show_send_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         print(f"ОШИБКА: Ошибка в show_send_menu: {e}")
 
 async def show_delete_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Shows delete menu"""
+    """Shows delete menu only for users with delete rights"""
     try:
         user_id = update.effective_user.id
         user_data = get_user(user_id)
@@ -3079,6 +3110,10 @@ async def show_delete_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
             keyboard.append(['🗑️ Удалить предложения'])
         if user_id == DEVELOPER_ID:
             keyboard.append(['🗑️ Удалить пользователя'])
+            
+        if not keyboard:
+            await update.message.reply_text("❌ У вас нет прав для удаления.")
+            return
             
         keyboard.append(['🔙 Назад'])
         
@@ -3195,7 +3230,7 @@ async def handle_simple_message(update: Update, context: ContextTypes.DEFAULT_TY
         elif text == '💡 Просмотр предложений' and user_id == DEVELOPER_ID:
             await show_suggestions(update)
         
-        elif text == 'Список пользователей' and (user_id == DEVELOPER_ID or can_manage_users(user_id)):
+        elif text == '👥 Список пользователей' and (user_id == DEVELOPER_ID or can_manage_users(user_id)):
             await show_users_list(update)
 
         elif text == '💰 Дать денюжку':
@@ -3264,7 +3299,8 @@ async def handle_simple_message(update: Update, context: ContextTypes.DEFAULT_TY
         elif text == '👑 Назначить роль' and user_id == DEVELOPER_ID:
             await start_role_assignment(update, context)
             
-        elif text == '📚 Отправить ДЗ' and can_send_homework(user_id, group_name):	              await ask_homework_details(update, context)
+        elif text == '📚 Отправить ДЗ' and can_send_homework(user_id, group_name):
+            await ask_homework_details(update, context)
 
         elif text == '📢 Отправить уведомление' and can_send_notifications(user_id, group_name):
             await ask_notification_details(update, context)
@@ -5347,6 +5383,9 @@ def main():
                 MessageHandler(filters.Regex('^👑 Назначить роль$'), start_role_assignment),
                 MessageHandler(filters.Regex('^🔧 Управление правами$'), manage_user_rights_menu),
                 MessageHandler(filters.Regex('^🔧 Настройки уведомлений$'), show_notification_settings),
+                MessageHandler(filters.Regex('^📤 Отправка$'), show_send_menu),
+                MessageHandler(filters.Regex('^🗑️ Удаление$'), show_delete_menu),
+                MessageHandler(filters.Regex('^👥 Список пользователей$'), lambda update, context: show_users_list(update)),
             ],
             states={
                 AWAITING_GROUP: [
