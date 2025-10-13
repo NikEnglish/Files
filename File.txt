@@ -17,7 +17,7 @@ YEKATERINBURG_TZ = timezone(timedelta(hours=5))
 DEFAULT_GROUP = None
 
 # States for ConversationHandler - УВЕЛИЧИВАЕМ КОЛИЧЕСТВО СОСТОЯНИЙ
-AWAITING_HOMEWORK, AWAITING_INFO, AWAITING_SPORT, AWAITING_SUGGESTION, AWAITING_HOMEWORK_DELETE, AWAITING_INFO_DELETE, AWAITING_SPORT_DELETE, AWAITING_USER_DELETE, AWAITING_SUGGESTION_DELETE, AWAITING_GROUP, AWAITING_SUGGESTION_RESPONSE, AWAITING_BIRTHDAY, AWAITING_GLOBAL_NOTIFICATION, AWAITING_ADD_SPECIAL_USER, AWAITING_USER_RIGHTS, AWAITING_ROLE_ASSIGNMENT, AWAITING_NOTIFICATION_SETTINGS, AWAITING_CUSTOM_ROLE, AWAITING_EVENT, AWAITING_EVENT_BUTTONS = range(21)
+AWAITING_HOMEWORK, AWAITING_INFO, AWAITING_SPORT, AWAITING_SUGGESTION, AWAITING_HOMEWORK_DELETE, AWAITING_INFO_DELETE, AWAITING_SPORT_DELETE, AWAITING_USER_DELETE, AWAITING_SUGGESTION_DELETE, AWAITING_GROUP, AWAITING_SUGGESTION_RESPONSE, AWAITING_BIRTHDAY, AWAITING_GLOBAL_NOTIFICATION, AWAITING_ADD_SPECIAL_USER, AWAITING_USER_RIGHTS, AWAITING_ROLE_ASSIGNMENT, AWAITING_NOTIFICATION_SETTINGS, AWAITING_CUSTOM_ROLE, AWAITING_EVENT, AWAITING_EVENT_BUTTONS = range(20)
 
 # User Roles
 ROLE_STUDENT = 'student'
@@ -1344,23 +1344,6 @@ def get_user_role_display(user_id):
     }
     
     return role_map.get(user['role'], "Студент")
-
-# -------------------- NEW RIGHTS CHECK FUNCTIONS --------------------
-
-def has_any_send_right(user_id, group_name=None):
-    """Проверяет, есть ли у пользователя хотя бы одно право на отправку"""
-    return (can_send_homework(user_id, group_name) or 
-            can_send_notifications(user_id, group_name) or 
-            can_send_sport_notifications(user_id, group_name) or 
-            can_send_global_notifications(user_id) or 
-            can_create_events(user_id, group_name))
-
-def has_any_delete_right(user_id, group_name=None):
-    """Проверяет, есть ли у пользователя хотя бы одно право на удаление"""
-    return (can_delete_homework(user_id, group_name) or 
-            can_delete_notifications(user_id, group_name) or 
-            can_delete_sport_notifications(user_id, group_name) or 
-            can_delete_suggestions(user_id))
 
 # -------------------- CONTACT FUNCTIONS --------------------
 
@@ -2988,27 +2971,46 @@ async def show_main_menu(update: Update, user_id: int):
         elif user_data['custom_role_name']:
             welcome_text = f"🔧 Добро пожаловать, {user_data['custom_role_name']}!"
 
-        # Базовые кнопки для всех пользователей
+        # Создаем меню динамически в зависимости от прав
         keyboard = [
             ['📅 Расписание', '📝 ДЗ', 'ℹ️ Информация'],
             ['💡 Предложить идею', '💰 Дать денюжку', '🔔 Расписание звонков'],
+            ['📞 Связь', '🎂 Установить день рождения', '🎓 Сменить группу'],
+            ['🔧 Настройки']
         ]
-
-        # Кнопки отправки (только для тех, у кого есть права)
-        if has_any_send_right(user_id, group_name):
-            keyboard.append(['📤 Отправка'])
-
-        # Кнопки удаления (только для тех, у кого есть права)
-        if has_any_delete_right(user_id, group_name):
-            keyboard.append(['🗑️ Удаление'])
-
-        # Общие кнопки
-        keyboard.append(['📞 Связь', '🎂 Установить день рождения', '🎓 Сменить группу'])
-        keyboard.append(['🔧 Настройки'])
-
-        # Кнопки только для разработчика
+        
+        # Проверяем права на отправку
+        has_any_send_right = (
+            can_send_homework(user_id, group_name) or
+            can_send_notifications(user_id, group_name) or
+            can_send_sport_notifications(user_id, group_name) or
+            can_send_global_notifications(user_id) or
+            can_create_events(user_id, group_name)
+        )
+        
+        # Проверяем права на удаление
+        has_any_delete_right = (
+            can_delete_homework(user_id, group_name) or
+            can_delete_notifications(user_id, group_name) or
+            can_delete_sport_notifications(user_id, group_name) or
+            can_delete_suggestions(user_id) or
+            user_id == DEVELOPER_ID
+        )
+        
+        # Добавляем кнопки отправки и удаления если есть права
+        if has_any_send_right or has_any_delete_right:
+            menu_row = []
+            if has_any_send_right:
+                menu_row.append('📤 Отправка')
+            if has_any_delete_right:
+                menu_row.append('🗑️ Удаление')
+            
+            if menu_row:  # Добавляем строку только если есть хотя бы одна кнопка
+                keyboard.insert(2, menu_row)  # Вставляем после второй строки
+        
+        # Добавляем кнопки для разработчика
         if user_id == DEVELOPER_ID:
-            keyboard.append(['📦 Резервная копия', '👑 Назначить роль', '🔧 Управление правами', '💡 Просмотр предложений', '👥 Список пользователей'])
+            keyboard.append(['📦 Резервная копия', '👑 Назначить роль', '🔧 Управление правами', '💡 Просмотр предложений'])
 
         reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
         
@@ -3025,100 +3027,92 @@ async def show_main_menu(update: Update, user_id: int):
         except:
             pass
 
-async def show_contact_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Shows contact menu"""
-    try:
-        user_id = update.effective_user.id
-        user_data = get_user(user_id)
-        group_name = user_data['group_name']
-        
-        # Получаем информацию о ролях в группе
-        starosta = get_group_role(group_name, ROLE_STAROSTA) if group_name else None
-        deputy_starosta = get_group_role(group_name, ROLE_DEPUTY_STAROSTA) if group_name else None
-        fizorg = get_group_role(group_name, ROLE_PHYSICAL_ORGANIZER) if group_name else None
-        deputy_fizorg = get_group_role(group_name, ROLE_DEPUTY_PHYSICAL_ORGANIZER) if group_name else None
-        
-        keyboard = [
-            ['📞 Связаться с разработчиком']
-        ]
-        
-        if starosta:
-            keyboard.append(['📞 Связаться со старостой'])
-        if deputy_starosta:
-            keyboard.append(['📞 Связаться с замом старосты'])
-        if fizorg:
-            keyboard.append(['📞 Связаться с физоргом'])
-        if deputy_fizorg:
-            keyboard.append(['📞 Связаться с замом физорга'])
-            
-        keyboard.append(['🔙 Назад'])
-        
-        reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
-        await update.message.reply_text("👥 <b>Связь</b>\n\nВыберите, с кем хотите связаться:", parse_mode='HTML', reply_markup=reply_markup)
-        
-    except Exception as e:
-        print(f"ОШИБКА: Ошибка в show_contact_menu: {e}")
-
 async def show_send_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Shows send menu only for users with send rights"""
+    """Shows send menu only if user has at least one send right"""
     try:
         user_id = update.effective_user.id
         user_data = get_user(user_id)
         group_name = user_data['group_name']
+        
+        # Проверяем есть ли хотя бы одно право на отправку
+        has_any_send_right = (
+            can_send_homework(user_id, group_name) or
+            can_send_notifications(user_id, group_name) or
+            can_send_sport_notifications(user_id, group_name) or
+            can_send_global_notifications(user_id) or
+            can_create_events(user_id, group_name)
+        )
+        
+        if not has_any_send_right:
+            await update.message.reply_text("❌ У вас нет прав для отправки каких-либо сообщений.")
+            return
         
         keyboard = []
         
+        # Добавляем только те кнопки, на которые есть права
         if can_send_homework(user_id, group_name):
-            keyboard.append(['📚 Отправить ДЗ'])
+            keyboard.append([InlineKeyboardButton("📚 Отправить ДЗ", callback_data="send_homework")])
         if can_send_notifications(user_id, group_name):
-            keyboard.append(['📢 Отправить уведомление'])
+            keyboard.append([InlineKeyboardButton("📢 Отправить уведомление", callback_data="send_notification")])
         if can_send_sport_notifications(user_id, group_name):
-            keyboard.append(['🏃‍♂️ Отправить спортивное уведомление'])
+            keyboard.append([InlineKeyboardButton("🏃‍♂️ Отправить спортивное уведомление", callback_data="send_sport")])
         if can_send_global_notifications(user_id):
-            keyboard.append(['🌍 Отправить всем группам'])
+            keyboard.append([InlineKeyboardButton("🌍 Отправить всем группам", callback_data="send_global")])
         if can_create_events(user_id, group_name):
-            keyboard.append(['📅 Создать событие'])
+            keyboard.append([InlineKeyboardButton("📅 Создать событие", callback_data="send_event")])
             
-        if not keyboard:
-            await update.message.reply_text("❌ У вас нет прав для отправки.")
-            return
-            
-        keyboard.append(['🔙 Назад'])
+        keyboard.append([InlineKeyboardButton("🔙 Назад", callback_data="send_back")])
         
-        reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
-        await update.message.reply_text("📤 <b>Отправка</b>\n\nВыберите, что хотите отправить:", parse_mode='HTML', reply_markup=reply_markup)
+        await update.message.reply_text(
+            "📤 <b>Отправка</b>\n\nВыберите, что хотите отправить:",
+            parse_mode='HTML',
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
         
     except Exception as e:
         print(f"ОШИБКА: Ошибка в show_send_menu: {e}")
 
 async def show_delete_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Shows delete menu only for users with delete rights"""
+    """Shows delete menu only if user has at least one delete right"""
     try:
         user_id = update.effective_user.id
         user_data = get_user(user_id)
         group_name = user_data['group_name']
         
+        # Проверяем есть ли хотя бы одно право на удаление
+        has_any_delete_right = (
+            can_delete_homework(user_id, group_name) or
+            can_delete_notifications(user_id, group_name) or
+            can_delete_sport_notifications(user_id, group_name) or
+            can_delete_suggestions(user_id) or
+            user_id == DEVELOPER_ID  # Разработчик всегда может удалять пользователей
+        )
+        
+        if not has_any_delete_right:
+            await update.message.reply_text("❌ У вас нет прав для удаления каких-либо данных.")
+            return
+        
         keyboard = []
         
+        # Добавляем только те кнопки, на которые есть права
         if can_delete_homework(user_id, group_name):
-            keyboard.append(['🗑️ Удалить ДЗ'])
+            keyboard.append([InlineKeyboardButton("🗑️ Удалить ДЗ", callback_data="delete_homework_menu")])
         if can_delete_notifications(user_id, group_name):
-            keyboard.append(['🗑️ Удалить уведомление'])
+            keyboard.append([InlineKeyboardButton("🗑️ Удалить уведомление", callback_data="delete_notification_menu")])
         if can_delete_sport_notifications(user_id, group_name):
-            keyboard.append(['🗑️ Удалить спортивные уведомления'])
+            keyboard.append([InlineKeyboardButton("🗑️ Удалить спортивные уведомления", callback_data="delete_sport_menu")])
         if can_delete_suggestions(user_id):
-            keyboard.append(['🗑️ Удалить предложения'])
+            keyboard.append([InlineKeyboardButton("🗑️ Удалить предложения", callback_data="delete_suggestions_menu")])
         if user_id == DEVELOPER_ID:
-            keyboard.append(['🗑️ Удалить пользователя'])
+            keyboard.append([InlineKeyboardButton("🗑️ Удалить пользователя", callback_data="delete_user_menu")])
             
-        if not keyboard:
-            await update.message.reply_text("❌ У вас нет прав для удаления.")
-            return
-            
-        keyboard.append(['🔙 Назад'])
+        keyboard.append([InlineKeyboardButton("🔙 Назад", callback_data="delete_back")])
         
-        reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
-        await update.message.reply_text("🗑️ <b>Удаление</b>\n\nВыберите, что хотите удалить:", parse_mode='HTML', reply_markup=reply_markup)
+        await update.message.reply_text(
+            "🗑️ <b>Удаление</b>\n\nВыберите, что хотите удалить:",
+            parse_mode='HTML',
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
         
     except Exception as e:
         print(f"ОШИБКА: Ошибка в show_delete_menu: {e}")
@@ -3230,7 +3224,7 @@ async def handle_simple_message(update: Update, context: ContextTypes.DEFAULT_TY
         elif text == '💡 Просмотр предложений' and user_id == DEVELOPER_ID:
             await show_suggestions(update)
         
-        elif text == '👥 Список пользователей' and (user_id == DEVELOPER_ID or can_manage_users(user_id)):
+        elif text == 'Список пользователей' and (user_id == DEVELOPER_ID or can_manage_users(user_id)):
             await show_users_list(update)
 
         elif text == '💰 Дать денюжку':
@@ -3278,50 +3272,11 @@ async def handle_simple_message(update: Update, context: ContextTypes.DEFAULT_TY
         elif text == '🗑️ Удаление':
             await show_delete_menu(update, context)
 
-        elif text == '🗑️ Удалить пользователя' and user_id == DEVELOPER_ID:
-            await delete_user_menu(update, context)
-
-        elif text == '🗑️ Удалить спортивные уведомления' and can_delete_sport_notifications(user_id, group_name):
-            await delete_sport_notification_menu(update, context)
-            
-        elif text == '🗑️ Удалить предложения' and can_delete_suggestions(user_id):
-            await delete_suggestions_menu(update, context)
-            
-        elif text == '🗑️ Удалить ДЗ' and can_delete_homework(user_id, group_name):
-            await delete_homework_menu(update, context)
-
-        elif text == '🗑️ Удалить уведомление' and can_delete_notifications(user_id, group_name):
-            await delete_notification_menu(update, context)
-        
         elif text == '📤 Отправка':
             await show_send_menu(update, context)
             
         elif text == '👑 Назначить роль' and user_id == DEVELOPER_ID:
             await start_role_assignment(update, context)
-            
-        elif text == '📚 Отправить ДЗ' and can_send_homework(user_id, group_name):
-            await ask_homework_details(update, context)
-
-        elif text == '📢 Отправить уведомление' and can_send_notifications(user_id, group_name):
-            await ask_notification_details(update, context)
-    
-        elif text == '🌍 Отправить всем группам' and can_send_global_notifications(user_id):
-            await ask_global_notification_details(update, context)
-    
-        elif text == '🏃‍♂️ Отправить спортивное уведомление' and can_send_sport_notifications(user_id, group_name):
-            await ask_sport_notification_details(update, context)
-    
-        elif text == '📅 Создать событие' and can_create_events(user_id, group_name):
-            await ask_event_details(update, context)
-        
-        elif text == '💡 Предложить идею':
-            await ask_suggestion_details(update, context)
-        
-        elif text == '🎂 Установить день рождения':
-            await ask_birthday_date(update, context)
-        
-        elif text == '🎓 Сменить группу':
-            return await ask_user_group(update, context)
             
         elif text == '🔧 Управление правами' and (user_id == DEVELOPER_ID or can_manage_users(user_id)):
             await manage_user_rights_menu(update, context)
@@ -5329,6 +5284,96 @@ async def handle_rights_toggle(update: Update, context: ContextTypes.DEFAULT_TYP
         print(f"ОШИБКА: Ошибка в handle_rights_toggle: {e}")
         await query.edit_message_text("❌ Произошла ошибка при обновлении прав.")
 
+# -------------------- SEND AND DELETE CALLBACK HANDLERS --------------------
+
+async def handle_send_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handles send menu callbacks"""
+    try:
+        query = update.callback_query
+        await query.answer()
+        
+        user_id = query.from_user.id
+        user_data = get_user(user_id)
+        
+        if query.data == "send_back":
+            await query.edit_message_text("🔙 Возврат в главное меню")
+            await show_main_menu(update, user_id)
+            return
+        
+        elif query.data == "send_homework":
+            if can_send_homework(user_id, user_data['group_name']):
+                await query.edit_message_text("📚 <b>Отправка ДЗ</b>")
+                await ask_homework_details(update, context)
+            else:
+                await query.edit_message_text("❌ У вас нет прав для отправки ДЗ")
+                
+        elif query.data == "send_notification":
+            if can_send_notifications(user_id, user_data['group_name']):
+                await query.edit_message_text("📢 <b>Отправка уведомления</b>")
+                await ask_notification_details(update, context)
+            else:
+                await query.edit_message_text("❌ У вас нет прав для отправки уведомлений")
+                
+        elif query.data == "send_sport":
+            if can_send_sport_notifications(user_id, user_data['group_name']):
+                await query.edit_message_text("🏃‍♂️ <b>Отправка спортивного уведомления</b>")
+                await ask_sport_notification_details(update, context)
+            else:
+                await query.edit_message_text("❌ У вас нет прав для отправки спортивных уведомлений")
+                
+        elif query.data == "send_global":
+            if can_send_global_notifications(user_id):
+                await query.edit_message_text("🌍 <b>Отправка глобального уведомления</b>")
+                await ask_global_notification_details(update, context)
+            else:
+                await query.edit_message_text("❌ У вас нет прав для глобальных уведомлений")
+                
+        elif query.data == "send_event":
+            if can_create_events(user_id, user_data['group_name']):
+                await query.edit_message_text("📅 <b>Создание события</b>")
+                await ask_event_details(update, context)
+            else:
+                await query.edit_message_text("❌ У вас нет прав для создания событий")
+        
+    except Exception as e:
+        print(f"ОШИБКА: Ошибка в handle_send_callback: {e}")
+
+async def handle_delete_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handles delete menu callbacks"""
+    try:
+        query = update.callback_query
+        await query.answer()
+        
+        user_id = query.from_user.id
+        
+        if query.data == "delete_back":
+            await query.edit_message_text("🔙 Возврат в главное меню")
+            await show_main_menu(update, user_id)
+            return
+        
+        elif query.data == "delete_homework_menu":
+            await query.edit_message_text("🗑️ <b>Удаление ДЗ</b>")
+            await delete_homework_menu(update, context)
+            
+        elif query.data == "delete_notification_menu":
+            await query.edit_message_text("🗑️ <b>Удаление уведомлений</b>")
+            await delete_notification_menu(update, context)
+            
+        elif query.data == "delete_sport_menu":
+            await query.edit_message_text("🗑️ <b>Удаление спортивных уведомлений</b>")
+            await delete_sport_notification_menu(update, context)
+            
+        elif query.data == "delete_suggestions_menu":
+            await query.edit_message_text("🗑️ <b>Удаление предложений</b>")
+            await delete_suggestions_menu(update, context)
+            
+        elif query.data == "delete_user_menu":
+            await query.edit_message_text("🗑️ <b>Удаление пользователей</b>")
+            await delete_user_menu(update, context)
+        
+    except Exception as e:
+        print(f"ОШИБКА: Ошибка в handle_delete_menu_callback: {e}")
+
 # -------------------- JOB QUEUE FUNCTIONS --------------------
 
 async def init_schedule_cache(application):
@@ -5383,9 +5428,6 @@ def main():
                 MessageHandler(filters.Regex('^👑 Назначить роль$'), start_role_assignment),
                 MessageHandler(filters.Regex('^🔧 Управление правами$'), manage_user_rights_menu),
                 MessageHandler(filters.Regex('^🔧 Настройки уведомлений$'), show_notification_settings),
-                MessageHandler(filters.Regex('^📤 Отправка$'), show_send_menu),
-                MessageHandler(filters.Regex('^🗑️ Удаление$'), show_delete_menu),
-                MessageHandler(filters.Regex('^👥 Список пользователей$'), lambda update, context: show_users_list(update)),
             ],
             states={
                 AWAITING_GROUP: [
@@ -5440,6 +5482,8 @@ def main():
         app.add_handler(CallbackQueryHandler(handle_event_button_callback, pattern='^event_'))
         app.add_handler(CallbackQueryHandler(handle_show_users_callback, pattern='^show_users_'))
         app.add_handler(CallbackQueryHandler(handle_back_to_groups, pattern='^back_to_groups$'))
+        app.add_handler(CallbackQueryHandler(handle_send_callback, pattern='^send_'))
+        app.add_handler(CallbackQueryHandler(handle_delete_menu_callback, pattern='^delete_'))
         app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_simple_message))
         
         # Добавляем обработчик для неизвестных сообщений
