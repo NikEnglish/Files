@@ -3049,50 +3049,37 @@ async def show_main_menu(update: Update, user_id: int):
             pass
 
 async def show_send_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Shows send menu only if user has at least one send right"""
+    """Shows send menu based on user rights"""
     try:
         user_id = update.effective_user.id
         user_data = get_user(user_id)
         group_name = user_data['group_name']
         
-        # Проверяем есть ли хотя бы одно право на отправку
-        has_any_send_right = (
-            can_send_homework(user_id, group_name) or
-            can_send_notifications(user_id, group_name) or
-            can_send_sport_notifications(user_id, group_name) or
-            can_send_global_notifications(user_id) or
-            can_create_events(user_id, group_name)
-        )
-        
-        if not has_any_send_right:
-            await update.message.reply_text("❌ У вас нет прав для отправки каких-либо сообщений.")
-            return
-        
         keyboard = []
         
-        # Добавляем только те кнопки, на которые есть права
         if can_send_homework(user_id, group_name):
-            keyboard.append([InlineKeyboardButton("📚 Отправить ДЗ", callback_data="send_homework")])
+            keyboard.append(['📚 Отправить ДЗ'])
         if can_send_notifications(user_id, group_name):
-            keyboard.append([InlineKeyboardButton("📢 Отправить уведомление", callback_data="send_notification")])
+            keyboard.append(['📢 Отправить уведомление'])
         if can_send_sport_notifications(user_id, group_name):
-            keyboard.append([InlineKeyboardButton("🏃‍♂️ Отправить спортивное уведомление", callback_data="send_sport")])
+            keyboard.append(['🏃‍♂️ Отправить спортивное уведомление'])
         if can_send_global_notifications(user_id):
-            keyboard.append([InlineKeyboardButton("🌍 Отправить всем группам", callback_data="send_global")])
+            keyboard.append(['🌍 Отправить всем группам'])
         if can_create_events(user_id, group_name):
-            keyboard.append([InlineKeyboardButton("📅 Создать событие", callback_data="send_event")])
+            keyboard.append(['📅 Создать событие'])
             
-        keyboard.append([InlineKeyboardButton("🔙 Назад", callback_data="send_back")])
+        keyboard.append(['🔙 Назад'])
         
+        reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
         await update.message.reply_text(
-            "📤 <b>Отправка</b>\n\nВыберите, что хотите отправить:",
-            parse_mode='HTML',
-            reply_markup=InlineKeyboardMarkup(keyboard)
+            "📤 <b>Отправка</b>\n\nВыберите, что хотите отправить:", 
+            parse_mode='HTML', 
+            reply_markup=reply_markup
         )
         
     except Exception as e:
         print(f"ОШИБКА: Ошибка в show_send_menu: {e}")
-
+        await update.message.reply_text("❌ Произошла ошибка при загрузке меню отправки.")
 async def show_delete_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Shows delete menu only if user has at least one delete right"""
     try:
