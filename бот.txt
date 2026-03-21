@@ -1510,7 +1510,7 @@ def get_type_emoji(lesson_type):
     return emoji_map.get(lesson_type, '📚')
 
 def find_merged_groups(current_lesson, all_parsed_lessons):
-    """Finds groups that have the same lesson at the same time and room"""
+    """Finds groups that have exactly the same lesson at the same time, room, campus, teacher, subject, and pair number"""
     merged = []
     current_group = current_lesson['group']
     for lesson in all_parsed_lessons:
@@ -1518,7 +1518,11 @@ def find_merged_groups(current_lesson, all_parsed_lessons):
            lesson['datetime'].date() == current_lesson['datetime'].date() and \
            lesson['start_time'] == current_lesson['start_time'] and \
            lesson['end_time'] == current_lesson['end_time'] and \
-           lesson['room'] == current_lesson['room']:
+           lesson['room'] == current_lesson['room'] and \
+           lesson['campus'] == current_lesson['campus'] and \
+           lesson['teacher'] == current_lesson['teacher'] and \
+           lesson['subject'] == current_lesson['subject'] and \
+           lesson['number'] == current_lesson['number']:
             merged.append(lesson['group'])
     return merged
 
