@@ -3,58 +3,50 @@ import chess.engine
 import os
 
 def start_pc_assistant():
-    # Путь к экзешнику в той же папке
+    # Путь к экзешнику (должен лежать в той же папке)
     engine_path = os.path.join(os.getcwd(), "stockfish.exe")
 
     if not os.path.exists(engine_path):
-        print(f"Ошибка! Положи stockfish.exe сюда: {os.getcwd()}")
+        print(f"Ошибка! Положи stockfish.exe в папку: {os.getcwd()}")
         return
 
     try:
-        # Запускаем движок
         engine = chess.engine.SimpleEngine.popen_uci(engine_path)
-        
-        # Настройка 2500 ELO (из Smali кода Luk.AI)
+        # Ставим рейтинг 2500, как у Luk.AI
         engine.configure({"UCI_Elo": 2500, "UCI_LimitStrength": True})
-        print("--- Luk.AI PC Assistant запущен (2500 ELO) ---")
+        print("--- Бот готов! Можно вводить Bc3, Ne7, O-O и т.д. ---")
     except Exception as e:
-        print(f"Ошибка запуска движка: {e}")
+        print(f"Ошибка: {e}")
         return
 
     board = chess.Board()
     my_color = input("Твой цвет (w/b): ").lower().strip()
 
     while not board.is_game_over():
-        print("\n" + "="*20)
-        print(board)
-        print("="*20)
+        print(f"\n{board}\n")
         
         is_my_turn = (board.turn == chess.WHITE and my_color == 'w') or \
                      (board.turn == chess.BLACK and my_color == 'b')
 
         if is_my_turn:
-            print("\n[АНАЛИЗ...] Бот думает...")
-            # На компе можно ставить время и побольше, например 1.0 сек
+            print("--- ХОД БОТА ---")
             result = engine.play(board, chess.engine.Limit(time=1.0))
-            print(f"РЕКОМЕНДУЕМЫЙ ХОД: {result.move}")
+            print(f"РЕКОМЕНДУЮ: {result.move}")
             board.push(result.move)
         else:
-            move_input = input("\nВведи ход противника (напр. e2e4 или Nf3): ").strip()
+            move_input = input("ВВЕДИ ХОД ПРОТИВНИКА: ").strip()
             try:
+                # Пытаемся понять твой ввод (Bc3, Ne7 и т.д.)
                 try:
                     move = board.parse_san(move_input)
                 except:
                     move = board.parse_uci(move_input)
                 
-                if move in board.legal_moves:
-                    board.push(move)
-                else:
-                    print("Невозможный ход!")
+                board.push(move)
             except:
-                print("Ошибка формата (e4, Nf3, d5...)")
+                print("Ошибка! Пиши правильно, например: Bc3 или e4")
 
-    print("\nИгра окончена!")
-    print("Результат:", board.result())
+    print(f"Конец! Результат: {board.result()}")
     engine.quit()
 
 if __name__ == "__main__":
