@@ -2,41 +2,66 @@ import chess
 import chess.engine
 import os
 
-def start_pc_assistant():
-    # Путь к экзешнику (должен лежать в той же папке)
+# Словарь для перевода фигур на русский
+PIECES_RU = {
+    chess.PAWN: "ПЕШКУ",
+    chess.KNIGHT: "КОНЯ (N)",
+    chess.BISHOP: "СЛОНА (B)",
+    chess.ROOK: "ЛАДЬЮ (R)",
+    chess.QUEEN: "ФЕРЗЯ (Q)",
+    chess.KING: "КОРОЛЯ (K)"
+}
+
+def start_assistant():
+    # Путь к экзешнику в той же папке
     engine_path = os.path.join(os.getcwd(), "stockfish.exe")
 
     if not os.path.exists(engine_path):
-        print(f"Ошибка! Положи stockfish.exe в папку: {os.getcwd()}")
+        print(f"!!! ОШИБКА: Положи stockfish.exe в папку: {os.getcwd()}")
         return
 
     try:
         engine = chess.engine.SimpleEngine.popen_uci(engine_path)
-        # Ставим рейтинг 2500, как у Luk.AI
-        engine.configure({"UCI_Elo": 2500, "UCI_LimitStrength": True})
-        print("--- Бот готов! Можно вводить Bc3, Ne7, O-O и т.д. ---")
+        # Уровень сложности как у Luk.AI (2500 ELO)
+        engine.configure({"UCI_Elo": 3190, "UCI_LimitStrength": True})
+        print("\n=== ПОМОЩНИК ПРОТИВ LUK.AI ЗАПУЩЕН ===")
     except Exception as e:
-        print(f"Ошибка: {e}")
+        print(f"Ошибка движка: {e}")
         return
 
     board = chess.Board()
-    my_color = input("Твой цвет (w/b): ").lower().strip()
+    my_color = input("Твой цвет в игре (w - белые / b - черные): ").lower().strip()
 
     while not board.is_game_over():
-        print(f"\n{board}\n")
+        print("\n" + "-"*40)
+        print(board)
+        print("-"*40)
         
         is_my_turn = (board.turn == chess.WHITE and my_color == 'w') or \
                      (board.turn == chess.BLACK and my_color == 'b')
 
         if is_my_turn:
-            print("--- ХОД БОТА ---")
-            result = engine.play(board, chess.engine.Limit(time=1.0))
-            print(f"РЕКОМЕНДУЮ: {result.move}")
-            board.push(result.move)
+            print("\n>>> ДУМАЮ...")
+            result = engine.play(board, chess.engine.Limit(time=1.5))
+            move = result.move
+            
+            # Получаем инфо о ходе
+            piece_type = board.piece_at(move.from_square).piece_type
+            piece_name = PIECES_RU.get(piece_type)
+            target_square = chess.square_name(move.to_square)
+            san_move = board.san(move) # Красивый вид типа Ne7
+            
+            print(f"\n[ ХОДИ ТАК ]: Бери {piece_name} и ставь на {target_square}")
+            print(f"[ ЗАПИСЬ ХОДА ]: {san_move}")
+            
+            board.push(move)
+            input("\nНажми Enter, когда сделаешь ход в телефоне...")
         else:
-            move_input = input("ВВЕДИ ХОД ПРОТИВНИКА: ").strip()
+            print("\n<<< ЖДУ ХОД ПРОТИВНИКА")
+            move_input = input("Как сходил Luk.AI? (например, e4 или Bc3): ").strip()
+            
             try:
-                # Пытаемся понять твой ввод (Bc3, Ne7 и т.д.)
+                # Понимает и твои Bc3, и координаты e2e4
                 try:
                     move = board.parse_san(move_input)
                 except:
@@ -44,10 +69,11 @@ def start_pc_assistant():
                 
                 board.push(move)
             except:
-                print("Ошибка! Пиши правильно, например: Bc3 или e4")
+                print("!! Ошибка: Не понял ход. Пиши как в Chess.com (например, Nf3 или d5)")
 
-    print(f"Конец! Результат: {board.result()}")
+    print("\nПАРТИЯ ОКОНЧЕНА!")
+    print(f"Результат: {board.result()}")
     engine.quit()
 
 if __name__ == "__main__":
-    start_pc_assistant()
+    start_assistant()
