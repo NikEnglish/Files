@@ -1,0 +1,3499 @@
+import sqlite3
+import re
+import json
+import asyncio
+import requests
+import os
+import logging
+from datetime import datetime, timedelta, timezone, time
+from telegram import (
+    Update,
+    ReplyKeyboardMarkup,
+    ReplyKeyboardRemove,
+    InlineKeyboardMarkup,
+    InlineKeyboardButton,
+    InputMediaPhoto,
+    InputMediaVideo,
+    InputMediaDocument
+)
+from telegram.ext import (
+    Application,
+    CommandHandler,
+    MessageHandler,
+    filters,
+    ContextTypes,
+    ConversationHandler,
+    CallbackQueryHandler
+)
+from telegram.constants import ParseMode
+
+logging.getLogger('telegram').setLevel(logging.CRITICAL)
+logging.getLogger('httpx').setLevel(logging.CRITICAL)
+logging.getLogger('httpcore').setLevel(logging.CRITICAL)
+
+# -------------------- CONSTANTS AND SETTINGS --------------------
+BOT_TOKEN = "7861895122:AAEWbGEpXiWqQA3gsdtgtL92pxaoeLXpqzY"
+YEKATERINBURG_TZ = timezone(timedelta(hours=5))
+DEFAULT_GROUP = None
+
+# States for ConversationHandler
+(
+    AWAITING_HOMEWORK,
+    AWAITING_INFO,
+    AWAITING_SUGGESTION,
+    AWAITING_HOMEWORK_DELETE,
+    AWAITING_INFO_DELETE,
+    AWAITING_USER_DELETE,
+    AWAITING_SUGGESTION_DELETE,
+    AWAITING_GROUP,
+    AWAITING_SUGGESTION_RESPONSE,
+    AWAITING_BIRTHDAY,
+    AWAITING_GLOBAL_NOTIFICATION,
+    AWAITING_ADD_SPECIAL_USER,
+    AWAITING_USER_RIGHTS,
+    AWAITING_ROLE_ASSIGNMENT,
+    AWAITING_NOTIFICATION_SETTINGS,
+    AWAITING_CUSTOM_ROLE,
+    AWAITING_TEACHER_SELECTION,
+    AWAITING_TEACHER_PERIOD,
+    AWAITING_OTHER_GROUP_SELECTION,
+    AWAITING_OTHER_GROUP_PERIOD
+) = range(20)
+
+# User Roles
+ROLE_STUDENT = 'student'
+ROLE_STAROSTA = 'starosta'
+ROLE_DEPUTY_STAROSTA = 'deputy_starosta'
+ROLE_DEVELOPER = 'developer'
+ROLE_CUSTOM = 'custom'
+
+# Special Users (только разработчик)
+DEVELOPER_ID = 1775957387
+
+# Dynamic list of groups (will be populated from API)
+ALL_GROUPS = []
+
+# Schedule cache
+schedule_cache = {}
+last_schedule_check = None
+groups_cache = []
+last_groups_check = None
+
+# Teachers list cache
+teachers_cache = []
+last_teachers_check = None
+
+# Spam protection
+user_message_times = {}
+user_warnings = {}
+user_blocks = {}
+SPAM_THRESHOLD = 10
+SPAM_WINDOW = 5
+BLOCK_DURATIONS = [600, 1800, 3600, 7200, 36000, 180000]
+
+# Media collection for multiple media support
+user_media_collections = {}
+
+# -------------------- UPDATED CALL SCHEDULES --------------------
+
+# Regular schedule (Monday-Friday)
+REGULAR_CALL_SCHEDULE = [
+    {"type": "lesson", "number": 1, "part": 1, "start": "8:30", "end": "9:15"},
+    {"type": "break", "start": "9:15", "end": "9:20", "duration": 5},
+    {"type": "lesson", "number": 1, "part": 2, "start": "9:20", "end": "10:05"},
+    {"type": "break", "start": "10:05", "end": "10:15", "duration": 10},
+    {"type": "lesson", "number": 2, "part": 1, "start": "10:15", "end": "11:00"},
+    {"type": "break", "start": "11:00", "end": "11:05", "duration": 5},
+    {"type": "lesson", "number": 2, "part": 2, "start": "11:05", "end": "11:50"},
+    {"type": "break", "start": "11:50", "end": "12:40", "duration": 50},
+    {"type": "lesson", "number": 3, "part": 1, "start": "12:40", "end": "13:25"},
+    {"type": "break", "start": "13:25", "end": "13:30", "duration": 5},
+    {"type": "lesson", "number": 3, "part": 2, "start": "13:30", "end": "14:15"},
+    {"type": "break", "start": "14:15", "end": "14:25", "duration": 10},
+    {"type": "lesson", "number": 4, "part": 1, "start": "14:25", "end": "15:10"},
+    {"type": "break", "start": "15:10", "end": "15:15", "duration": 5},
+    {"type": "lesson", "number": 4, "part": 2, "start": "15:15", "end": "16:00"},
+    {"type": "break", "start": "16:00", "end": "16:10", "duration": 10},
+    {"type": "lesson", "number": 5, "part": 1, "start": "16:10", "end": "16:55"},
+    {"type": "break", "start": "16:55", "end": "17:00", "duration": 5},
+    {"type": "lesson", "number": 5, "part": 2, "start": "17:00", "end": "17:45"},
+    {"type": "break", "start": "17:45", "end": "17:55", "duration": 10},
+    {"type": "lesson", "number": 6, "part": 1, "start": "17:55", "end": "18:40"},
+    {"type": "break", "start": "18:40", "end": "18:45", "duration": 5},
+    {"type": "lesson", "number": 6, "part": 2, "start": "18:45", "end": "19:30"}
+]
+
+# Saturday schedule
+SATURDAY_CALL_SCHEDULE = {
+    1: {"start": "8:30", "end": "9:45"},
+    "break1": {"start": "9:45", "end": "9:55", "duration": 10},
+    2: {"start": "9:55", "end": "11:10"},
+    "break2": {"start": "11:10", "end": "11:20", "duration": 10},
+    3: {"start": "11:20", "end": "12:40"},
+    "break3": {"start": "12:40", "end": "13:20", "duration": 40},
+    4: {"start": "13:20", "end": "14:35"},
+    "break4": {"start": "14:35", "end": "14:45", "duration": 10},
+    5: {"start": "14:45", "end": "16:00"},
+    "break5": {"start": "16:00", "end": "16:10", "duration": 10},
+    6: {"start": "16:10", "end": "17:25"}
+}
+
+# Short day schedule
+SHORT_DAY_CALL_SCHEDULE = {
+    1: {"start": "8:30", "end": "9:30"},
+    "break1": {"start": "9:30", "end": "9:40", "duration": 10},
+    2: {"start": "9:40", "end": "10:40"},
+    "break2": {"start": "10:40", "end": "10:50", "duration": 10},
+    3: {"start": "10:50", "end": "11:50"},
+    "break3": {"start": "11:50", "end": "12:30", "duration": 40},
+    4: {"start": "12:30", "end": "13:30"},
+    "break4": {"start": "13:30", "end": "13:40", "duration": 10},
+    5: {"start": "13:40", "end": "14:40"},
+    "break5": {"start": "14:40", "end": "14:50", "duration": 10},
+    6: {"start": "14:50", "end": "15:50"}
+}
+
+# -------------------- DATABASE FUNCTIONS --------------------
+
+def init_db():
+    """Initializes the database with proper error handling"""
+    conn = None
+    try:
+        conn = sqlite3.connect('bot_data.db')
+        cur = conn.cursor()
+        
+        # Users table with all required columns
+        cur.execute('''CREATE TABLE IF NOT EXISTS users (
+            user_id INTEGER PRIMARY KEY,
+            username TEXT,
+            first_name TEXT,
+            last_name TEXT,
+            group_name TEXT,
+            role TEXT DEFAULT 'student',
+            custom_role_name TEXT,
+            can_send_homework BOOLEAN DEFAULT 0,
+            can_send_notifications BOOLEAN DEFAULT 0,
+            can_send_global_notifications BOOLEAN DEFAULT 0,
+            can_delete_homework BOOLEAN DEFAULT 0,
+            can_delete_notifications BOOLEAN DEFAULT 0,
+            can_delete_suggestions BOOLEAN DEFAULT 0,
+            can_manage_users BOOLEAN DEFAULT 0,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )''')
+        
+        # Group roles table - роли для каждой группы
+        cur.execute('''CREATE TABLE IF NOT EXISTS group_roles (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            group_name TEXT NOT NULL,
+            role_type TEXT NOT NULL,
+            user_id INTEGER,
+            username TEXT,
+            first_name TEXT,
+            assigned_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(group_name, role_type),
+            FOREIGN KEY (user_id) REFERENCES users (user_id) ON DELETE SET NULL
+        )''')
+        
+        # User notification settings table
+        cur.execute('''CREATE TABLE IF NOT EXISTS user_notification_settings (
+            user_id INTEGER PRIMARY KEY,
+            lesson_start BOOLEAN DEFAULT 1,
+            new_homework BOOLEAN DEFAULT 1,
+            important_notifications BOOLEAN DEFAULT 1,
+            tomorrow_schedule BOOLEAN DEFAULT 1,
+            today_schedule BOOLEAN DEFAULT 1,
+            FOREIGN KEY (user_id) REFERENCES users (user_id) ON DELETE CASCADE
+        )''')
+        
+        # Homeworks table
+        cur.execute('''CREATE TABLE IF NOT EXISTS homeworks (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            subject TEXT,
+            task TEXT,
+            deadline TEXT,
+            group_name TEXT,
+            added_by INTEGER,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (added_by) REFERENCES users (user_id)
+        )''')
+        
+        # Homework media table
+        cur.execute('''CREATE TABLE IF NOT EXISTS homework_media (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            homework_id INTEGER,
+            media_type TEXT,
+            media_id TEXT,
+            caption TEXT,
+            FOREIGN KEY (homework_id) REFERENCES homeworks (id) ON DELETE CASCADE
+        )''')
+        
+        # Notifications table
+        cur.execute('''CREATE TABLE IF NOT EXISTS notifications (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            message TEXT,
+            group_name TEXT,
+            added_by INTEGER,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (added_by) REFERENCES users (user_id)
+        )''')
+        
+        # Notification media table
+        cur.execute('''CREATE TABLE IF NOT EXISTS notification_media (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            notification_id INTEGER,
+            media_type TEXT,
+            media_id TEXT,
+            caption TEXT,
+            FOREIGN KEY (notification_id) REFERENCES notifications (id) ON DELETE CASCADE
+        )''')
+        
+        # Suggestions table
+        cur.execute('''CREATE TABLE IF NOT EXISTS suggestions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER,
+            message TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (user_id) REFERENCES users (user_id)
+        )''')
+        
+        # Suggestion media table
+        cur.execute('''CREATE TABLE IF NOT EXISTS suggestion_media (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            suggestion_id INTEGER,
+            media_type TEXT,
+            media_id TEXT,
+            caption TEXT,
+            FOREIGN KEY (suggestion_id) REFERENCES suggestions (id) ON DELETE CASCADE
+        )''')
+        
+        # Suggestion responses table
+        cur.execute('''CREATE TABLE IF NOT EXISTS suggestion_responses (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            suggestion_id INTEGER,
+            responder_id INTEGER,
+            message TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (suggestion_id) REFERENCES suggestions (id),
+            FOREIGN KEY (responder_id) REFERENCES users (user_id)
+        )''')
+        
+        # Birthdays table
+        cur.execute('''CREATE TABLE IF NOT EXISTS birthdays (
+            user_id INTEGER PRIMARY KEY,
+            birthday_date TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (user_id) REFERENCES users (user_id) ON DELETE CASCADE
+        )''')
+        
+        # Global notifications table
+        cur.execute('''CREATE TABLE IF NOT EXISTS global_notifications (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            message TEXT,
+            added_by INTEGER,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (added_by) REFERENCES users (user_id)
+        )''')
+        
+        # Global notification media table
+        cur.execute('''CREATE TABLE IF NOT EXISTS global_notification_media (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            global_notification_id INTEGER,
+            media_type TEXT,
+            media_id TEXT,
+            caption TEXT,
+            FOREIGN KEY (global_notification_id) REFERENCES global_notifications (id) ON DELETE CASCADE
+        )''')
+        
+        conn.commit()
+        print("ЛОГ: База данных инициализирована.")
+    except sqlite3.Error as e:
+        print(f"ОШИБКА: Ошибка базы данных при инициализации: {e}")
+    finally:
+        if conn:
+            conn.close()
+
+def get_db_connection():
+    """Creates a connection to the database"""
+    try:
+        conn = sqlite3.connect('bot_data.db')
+        conn.row_factory = sqlite3.Row
+        return conn
+    except sqlite3.Error as e:
+        print(f"ОШИБКА: Ошибка базы данных при подключении: {e}")
+        return None
+
+def get_user(user_id):
+    """Gets user information"""
+    conn = get_db_connection()
+    if not conn: return None
+    try:
+        user = conn.execute('SELECT * FROM users WHERE user_id = ?', (user_id,)).fetchone()
+        return user
+    except sqlite3.Error as e:
+        print(f"ОШИБКА: Ошибка базы данных при получения пользователя: {e}")
+        return None
+    finally:
+        conn.close()
+
+def get_group_role(group_name, role_type):
+    """Gets role for specific group"""
+    conn = get_db_connection()
+    if not conn: return None
+    try:
+        role = conn.execute(
+            'SELECT * FROM group_roles WHERE group_name = ? AND role_type = ?', 
+            (group_name, role_type)
+        ).fetchone()
+        return role
+    except sqlite3.Error as e:
+        print(f"ОШИБКА: Ошибка базы данных при получения роли группы: {e}")
+        return None
+    finally:
+        conn.close()
+
+def set_group_role(group_name, role_type, user_id, username, first_name):
+    """Sets role for specific group"""
+    conn = get_db_connection()
+    if not conn: return False
+    try:
+        conn.execute('''INSERT OR REPLACE INTO group_roles 
+                     (group_name, role_type, user_id, username, first_name) 
+                     VALUES (?, ?, ?, ?, ?)''',
+                     (group_name, role_type, user_id, username, first_name))
+        
+        # Обновляем права пользователя в зависимости от роли
+        rights_data = {}
+        if role_type == ROLE_STAROSTA:
+            rights_data = {
+                'can_send_homework': 1,
+                'can_send_notifications': 1,
+                'can_delete_homework': 1,
+                'can_delete_notifications': 1,
+                'role': ROLE_STAROSTA
+            }
+        elif role_type == ROLE_DEPUTY_STAROSTA:
+            rights_data = {
+                'can_send_homework': 1,
+                'can_send_notifications': 1,
+                'can_delete_homework': 1,
+                'can_delete_notifications': 1,
+                'role': ROLE_DEPUTY_STAROSTA
+            }
+        
+        if rights_data:
+            conn.execute('''UPDATE users SET
+                         can_send_homework = ?,
+                         can_send_notifications = ?,
+                         can_delete_homework = ?,
+                         can_delete_notifications = ?,
+                         role = ?
+                         WHERE user_id = ?''',
+                         (rights_data.get('can_send_homework', 0),
+                          rights_data.get('can_send_notifications', 0),
+                          rights_data.get('can_delete_homework', 0),
+                          rights_data.get('can_delete_notifications', 0),
+                          rights_data.get('role', ROLE_STUDENT),
+                          user_id))
+        
+        conn.commit()
+        print(f"ЛОГ: Установлена роль {role_type} для группы {group_name} - пользователь {first_name}")
+        return True
+    except sqlite3.Error as e:
+        print(f"ОШИБКА: Ошибка базы данных при установке роли группы: {e}")
+        return False
+    finally:
+        conn.close()
+
+def remove_group_role(group_name, role_type):
+    """Removes role from group"""
+    conn = get_db_connection()
+    if not conn: return False
+    try:
+        # Получаем пользователя, у которого снимаем роль
+        role = get_group_role(group_name, role_type)
+        if role and role['user_id']:
+            # Сбрасываем права пользователя
+            conn.execute('''UPDATE users SET
+                         can_send_homework = 0,
+                         can_send_notifications = 0,
+                         can_delete_homework = 0,
+                         can_delete_notifications = 0,
+                         role = 'student'
+                         WHERE user_id = ?''', (role['user_id'],))
+        
+        conn.execute('DELETE FROM group_roles WHERE group_name = ? AND role_type = ?', 
+                    (group_name, role_type))
+        conn.commit()
+        print(f"ЛОГ: Удалена роль {role_type} для группы {group_name}")
+        return True
+    except sqlite3.Error as e:
+        print(f"ОШИБКА: Ошибка базы данных при удалении роли группы: {e}")
+        return False
+    finally:
+        conn.close()
+
+def get_user_notification_settings(user_id):
+    """Gets user notification settings"""
+    conn = get_db_connection()
+    if not conn: return None
+    try:
+        settings = conn.execute('SELECT * FROM user_notification_settings WHERE user_id = ?', (user_id,)).fetchone()
+        if not settings:
+            conn.execute('INSERT INTO user_notification_settings (user_id) VALUES (?)', (user_id,))
+            conn.commit()
+            settings = conn.execute('SELECT * FROM user_notification_settings WHERE user_id = ?', (user_id,)).fetchone()
+        return settings
+    except sqlite3.Error as e:
+        print(f"ОШИБКА: Ошибка базы данных при получения настроек уведомлений: {e}")
+        return None
+    finally:
+        conn.close()
+
+def update_user_notification_settings(user_id, setting_name, value):
+    """Updates user notification settings"""
+    conn = get_db_connection()
+    if not conn: return False
+    try:
+        conn.execute(f'UPDATE user_notification_settings SET {setting_name} = ? WHERE user_id = ?', (value, user_id))
+        conn.commit()
+        return True
+    except sqlite3.Error as e:
+        print(f"ОШИБКА: Ошибка базы данных при обновлении настроек уведомлений: {e}")
+        return False
+    finally:
+        conn.close()
+
+def get_all_users():
+    """Gets a list of all users"""
+    conn = get_db_connection()
+    if not conn: return []
+    try:
+        users = conn.execute('SELECT user_id, first_name, username, group_name, role, custom_role_name FROM users').fetchall()
+        return users
+    except sqlite3.Error as e:
+        print(f"ОШИБКА: Ошибка базы данных при получения списка пользователей: {e}")
+        return []
+    finally:
+        conn.close()
+
+def add_user(user_id, username, first_name, last_name):
+    """Adds a new user to the database or updates existing user"""
+    conn = get_db_connection()
+    if not conn: return
+    try:
+        existing_user = conn.execute('SELECT * FROM users WHERE user_id = ?', (user_id,)).fetchone()
+        role = ROLE_STUDENT
+        if user_id == DEVELOPER_ID:
+            role = ROLE_DEVELOPER
+        
+        if not existing_user:
+            conn.execute('''INSERT INTO users (user_id, username, first_name, last_name, role)
+                         VALUES (?, ?, ?, ?, ?)''',
+                         (user_id, username, first_name, last_name, role))
+            conn.execute('INSERT INTO user_notification_settings (user_id) VALUES (?)', (user_id,))
+            print(f"ЛОГ: Добавлен новый пользователь: {first_name} (ID: {user_id}) с ролью {role}")
+        else:
+            conn.execute('''UPDATE users 
+                         SET username = ?, first_name = ?, last_name = ?
+                         WHERE user_id = ?''',
+                         (username, first_name, last_name, user_id))
+            print(f"ЛОГ: Обновлен пользователь: {first_name} (ID: {user_id})")
+        
+        conn.commit()
+    except sqlite3.Error as e:
+        print(f"ОШИБКА: Ошибка базы данных при добавлении пользователя: {e}")
+    finally:
+        conn.close()
+
+def update_user_rights(user_id, rights_data):
+    """Updates user rights in the database"""
+    conn = get_db_connection()
+    if not conn: return False
+    try:
+        conn.execute('''UPDATE users SET
+                     can_send_homework = ?,
+                     can_send_notifications = ?,
+                     can_send_global_notifications = ?,
+                     can_delete_homework = ?,
+                     can_delete_notifications = ?,
+                     can_delete_suggestions = ?,
+                     can_manage_users = ?,
+                     role = ?,
+                     custom_role_name = ?
+                     WHERE user_id = ?''',
+                     (rights_data.get('can_send_homework', 0),
+                      rights_data.get('can_send_notifications', 0),
+                      rights_data.get('can_send_global_notifications', 0),
+                      rights_data.get('can_delete_homework', 0),
+                      rights_data.get('can_delete_notifications', 0),
+                      rights_data.get('can_delete_suggestions', 0),
+                      rights_data.get('can_manage_users', 0),
+                      rights_data.get('role', ROLE_STUDENT),
+                      rights_data.get('custom_role_name', None),
+                      user_id))
+        conn.commit()
+        print(f"ЛОГ: Обновлены права пользователя {user_id}")
+        return True
+    except sqlite3.Error as e:
+        print(f"ОШИБКА: Ошибка базы данных при обновлении прав: {e}")
+        return False
+    finally:
+        conn.close()
+
+def update_user_group(user_id, group_name):
+    """Updates the user's group"""
+    conn = get_db_connection()
+    if not conn: return
+    try:
+        conn.execute('UPDATE users SET group_name = ? WHERE user_id = ?', (group_name, user_id))
+        conn.commit()
+        print(f"ЛОГ: Пользователь {user_id} сменил группу на {group_name}")
+    except sqlite3.Error as e:
+        print(f"ОШИБКА: Ошибка базы данных при обновлении группы: {e}")
+    finally:
+        conn.close()
+
+def set_user_birthday(user_id, birthday_date):
+    """Sets or updates user's birthday"""
+    conn = get_db_connection()
+    if not conn: return False
+    try:
+        conn.execute('''INSERT OR REPLACE INTO birthdays (user_id, birthday_date)
+                     VALUES (?, ?)''', (user_id, birthday_date))
+        conn.commit()
+        print(f"ЛОГ: Установлен день рождения для пользователя {user_id}: {birthday_date}")
+        return True
+    except sqlite3.Error as e:
+        print(f"ОШИБКА: Ошибка базы данных при установке дня рождения: {e}")
+        return False
+    finally:
+        conn.close()
+
+def get_user_birthday(user_id):
+    """Gets user's birthday"""
+    conn = get_db_connection()
+    if not conn: return None
+    try:
+        result = conn.execute('SELECT birthday_date FROM birthdays WHERE user_id = ?', (user_id,)).fetchone()
+        return result['birthday_date'] if result else None
+    except sqlite3.Error as e:
+        print(f"ОШИБКА: Ошибка базы данных при получения дня рождения: {e}")
+        return None
+    finally:
+        conn.close()
+
+def get_today_birthdays():
+    """Gets all users who have birthday today"""
+    conn = get_db_connection()
+    if not conn: return []
+    try:
+        today = datetime.now().strftime('%d.%m')
+        birthdays = conn.execute('''SELECT u.user_id, u.first_name, u.username, u.group_name, b.birthday_date 
+                                 FROM users u JOIN birthdays b ON u.user_id = b.user_id 
+                                 WHERE b.birthday_date LIKE ? AND u.group_name IS NOT NULL''', (f'{today}%',)).fetchall()
+        return birthdays
+    except sqlite3.Error as e:
+        print(f"ОШИБКА: Ошибка базы данных при получения дней рождений: {e}")
+        return []
+    finally:
+        conn.close()
+
+def get_total_user_count():
+    """Gets the total number of users in the database"""
+    conn = get_db_connection()
+    if not conn: return 0
+    try:
+        count = conn.execute('SELECT COUNT(*) FROM users').fetchone()[0]
+        return count
+    except sqlite3.Error as e:
+        print(f"ОШИБКА: Ошибка базы данных при подсчете пользователей: {e}")
+        return 0
+    finally:
+        conn.close()
+
+def delete_homework(hw_id):
+    conn = get_db_connection()
+    if not conn: return
+    try:
+        conn.execute('DELETE FROM homeworks WHERE id = ?', (hw_id,))
+        conn.commit()
+    except sqlite3.Error as e:
+        print(f"ОШИБКА: Ошибка базы данных при удалении ДЗ: {e}")
+    finally:
+        conn.close()
+
+def delete_notification(notif_id):
+    conn = get_db_connection()
+    if not conn: return
+    try:
+        conn.execute('DELETE FROM notifications WHERE id = ?', (notif_id,))
+        conn.commit()
+    except sqlite3.Error as e:
+        print(f"ОШИБКА: Ошибка базы данных при удалении уведомления: {e}")
+    finally:
+        conn.close()
+
+def delete_user(user_id):
+    conn = get_db_connection()
+    if not conn: return
+    try:
+        conn.execute('DELETE FROM users WHERE user_id = ?', (user_id,))
+        conn.commit()
+        print(f"ЛОГ: Пользователь {user_id} удален из базы данных.")
+    except sqlite3.Error as e:
+        print(f"ОШИБКА: Ошибка базы данных при удалении пользователя: {e}")
+    finally:
+        conn.close()
+
+def delete_suggestion(suggestion_id):
+    conn = get_db_connection()
+    if not conn: return
+    try:
+        conn.execute('DELETE FROM suggestions WHERE id = ?', (suggestion_id,))
+        conn.commit()
+        print(f"ЛОГ: Предложение {suggestion_id} удалено из базы данных.")
+    except sqlite3.Error as e:
+        print(f"ОШИБКА: Ошибка базы данных при удалении предложения: {e}")
+    finally:
+        conn.close()
+
+def add_homework(subject, task, deadline, group_name, added_by):
+    """Adds homework to the database"""
+    conn = get_db_connection()
+    if not conn: return None
+    try:
+        cursor = conn.execute('''INSERT INTO homeworks (subject, task, deadline, group_name, added_by)
+                     VALUES (?, ?, ?, ?, ?)''', (subject, task, deadline, group_name, added_by))
+        homework_id = cursor.lastrowid
+        conn.commit()
+        print(f"ЛОГ: Добавлено ДЗ для группы {group_name}.")
+        return homework_id
+    except sqlite3.Error as e:
+        print(f"ОШИБКА: Ошибка базы данных при добавлении ДЗ: {e}")
+        return None
+    finally:
+        conn.close()
+
+def add_homework_media(homework_id, media_type, media_id, caption=None):
+    """Adds media to homework"""
+    conn = get_db_connection()
+    if not conn: return
+    try:
+        conn.execute('''INSERT INTO homework_media (homework_id, media_type, media_id, caption)
+                     VALUES (?, ?, ?, ?)''', (homework_id, media_type, media_id, caption))
+        conn.commit()
+    except sqlite3.Error as e:
+        print(f"ОШИБКА: Ошибка базы данных при добавлении медиа к ДЗ: {e}")
+    finally:
+        conn.close()
+
+def get_homeworks(group_name):
+    """Gets homework for a group"""
+    conn = get_db_connection()
+    if not conn: return []
+    try:
+        homeworks = conn.execute('''SELECT h.*, u.first_name 
+                                 FROM homeworks h JOIN users u ON h.added_by = u.user_id 
+                                 WHERE h.group_name = ? ORDER BY h.created_at DESC''', (group_name,)).fetchall()
+        result = []
+        for hw in homeworks:
+            hw_dict = dict(hw)
+            media = conn.execute('SELECT * FROM homework_media WHERE homework_id = ?', (hw_dict['id'],)).fetchall()
+            hw_dict['media'] = [dict(m) for m in media]
+            result.append(hw_dict)
+        return result
+    except sqlite3.Error as e:
+        print(f"ОШИБКА: Ошибка базы данных при получения ДЗ: {e}")
+        return []
+    finally:
+        conn.close()
+
+def add_notification(message, group_name, added_by):
+    """Adds a notification to the database"""
+    conn = get_db_connection()
+    if not conn: return None
+    try:
+        cursor = conn.execute('''INSERT INTO notifications (message, group_name, added_by)
+                     VALUES (?, ?, ?)''', (message, group_name, added_by))
+        notification_id = cursor.lastrowid
+        conn.commit()
+        print(f"ЛОГ: Добавлено уведомление для группы {group_name}.")
+        return notification_id
+    except sqlite3.Error as e:
+        print(f"ОШИБКА: Ошибка базы данных при добавлении уведомления: {e}")
+        return None
+    finally:
+        conn.close()
+
+def add_notification_media(notification_id, media_type, media_id, caption=None):
+    """Adds media to notification"""
+    conn = get_db_connection()
+    if not conn: return
+    try:
+        conn.execute('''INSERT INTO notification_media (notification_id, media_type, media_id, caption)
+                     VALUES (?, ?, ?, ?)''', (notification_id, media_type, media_id, caption))
+        conn.commit()
+    except sqlite3.Error as e:
+        print(f"ОШИБКА: Ошибка базы данных при добавлении медиа к уведомлению: {e}")
+    finally:
+        conn.close()
+
+def get_notifications(group_name):
+    """Gets notifications for a group"""
+    conn = get_db_connection()
+    if not conn: return []
+    try:
+        notifications = conn.execute('''SELECT n.*, u.first_name 
+                                     FROM notifications n JOIN users u ON n.added_by = u.user_id 
+                                     WHERE n.group_name = ? ORDER BY n.created_at DESC''', (group_name,)).fetchall()
+        result = []
+        for notif in notifications:
+            notif_dict = dict(notif)
+            media = conn.execute('SELECT * FROM notification_media WHERE notification_id = ?', (notif_dict['id'],)).fetchall()
+            notif_dict['media'] = [dict(m) for m in media]
+            result.append(notif_dict)
+        return result
+    except sqlite3.Error as e:
+        print(f"ОШИБКА: Ошибка базы данных при получения уведомлений: {e}")
+        return []
+    finally:
+        conn.close()
+
+def add_suggestion(user_id, message):
+    conn = get_db_connection()
+    if not conn: return None
+    try:
+        cursor = conn.execute('INSERT INTO suggestions (user_id, message) VALUES (?, ?)', (user_id, message))
+        suggestion_id = cursor.lastrowid
+        conn.commit()
+        print(f"ЛОГ: Пользователь {user_id} отправил предложение.")
+        return suggestion_id
+    except sqlite3.Error as e:
+        print(f"ОШИБКА: Ошибка базы данных при добавлении предложения: {e}")
+        return None
+    finally:
+        conn.close()
+
+def add_suggestion_media(suggestion_id, media_type, media_id, caption=None):
+    conn = get_db_connection()
+    if not conn: return
+    try:
+        conn.execute('''INSERT INTO suggestion_media (suggestion_id, media_type, media_id, caption)
+                     VALUES (?, ?, ?, ?)''', (suggestion_id, media_type, media_id, caption))
+        conn.commit()
+    except sqlite3.Error as e:
+        print(f"ОШИБКА: Ошибка базы данных при добавлении медиа к предложению: {e}")
+    finally:
+        conn.close()
+
+def add_suggestion_response(suggestion_id, responder_id, message):
+    conn = get_db_connection()
+    if not conn: return
+    try:
+        conn.execute('''INSERT INTO suggestion_responses (suggestion_id, responder_id, message)
+                     VALUES (?, ?, ?)''', (suggestion_id, responder_id, message))
+        conn.commit()
+        print(f"ЛОГ: Добавлен ответ на предложение {suggestion_id}.")
+    except sqlite3.Error as e:
+        print(f"ОШИБКА: Ошибка базы данных при добавлении ответа на предложение: {e}")
+    finally:
+        conn.close()
+
+def get_suggestions():
+    conn = get_db_connection()
+    if not conn: return []
+    try:
+        suggestions = conn.execute('''SELECT s.*, u.first_name, u.username 
+                                   FROM suggestions s JOIN users u ON s.user_id = u.user_id 
+                                   ORDER BY s.created_at DESC''').fetchall()
+        result = []
+        for s in suggestions:
+            s_dict = dict(s)
+            media = conn.execute('SELECT * FROM suggestion_media WHERE suggestion_id = ?', (s_dict['id'],)).fetchall()
+            s_dict['media'] = [dict(m) for m in media]
+            responses = conn.execute('''SELECT sr.*, u.first_name, u.username 
+                                    FROM suggestion_responses sr JOIN users u ON sr.responder_id = u.user_id 
+                                    WHERE sr.suggestion_id = ? ORDER BY sr.created_at''', (s_dict['id'],)).fetchall()
+            s_dict['responses'] = [dict(r) for r in responses]
+            result.append(s_dict)
+        return result
+    except sqlite3.Error as e:
+        print(f"ОШИБКА: Ошибка базы данных при получения предложений: {e}")
+        return []
+    finally:
+        conn.close()
+
+def add_global_notification(message, added_by):
+    conn = get_db_connection()
+    if not conn: return None
+    try:
+        cursor = conn.execute('INSERT INTO global_notifications (message, added_by) VALUES (?, ?)', (message, added_by))
+        global_notification_id = cursor.lastrowid
+        conn.commit()
+        print(f"ЛОГ: Добавлено глобальное уведомление.")
+        return global_notification_id
+    except sqlite3.Error as e:
+        print(f"ОШИБКА: Ошибка базы данных при добавлении глобального уведомления: {e}")
+        return None
+    finally:
+        conn.close()
+
+def add_global_notification_media(global_notification_id, media_type, media_id, caption=None):
+    conn = get_db_connection()
+    if not conn: return
+    try:
+        conn.execute('''INSERT INTO global_notification_media (global_notification_id, media_type, media_id, caption)
+                     VALUES (?, ?, ?, ?)''', (global_notification_id, media_type, media_id, caption))
+        conn.commit()
+    except sqlite3.Error as e:
+        print(f"ОШИБКА: Ошибка базы данных при добавлении медиа к глобальному уведомлению: {e}")
+    finally:
+        conn.close()
+
+# -------------------- SPAM PROTECTION --------------------
+
+def check_spam(user_id):
+    now = datetime.now().timestamp()
+    if user_id in user_blocks and now < user_blocks[user_id]:
+        return True, user_blocks[user_id] - now
+    
+    if user_id not in user_message_times:
+        user_message_times[user_id] = []
+        user_warnings[user_id] = 0
+    
+    user_message_times[user_id].append(now)
+    user_message_times[user_id] = [t for t in user_message_times[user_id] if now - t < SPAM_WINDOW]
+    
+    if len(user_message_times[user_id]) >= SPAM_THRESHOLD:
+        user_warnings[user_id] += 1
+        warning_count = user_warnings[user_id]
+        if warning_count - 1 < len(BLOCK_DURATIONS):
+            block_duration = BLOCK_DURATIONS[warning_count - 1]
+        else:
+            block_duration = BLOCK_DURATIONS[-1]
+        user_blocks[user_id] = now + block_duration
+        user_message_times[user_id] = []
+        return True, block_duration
+    return False, 0
+
+async def warn_user(update: Update, block_duration: int):
+    minutes = block_duration // 60
+    await update.message.reply_text(
+        f"⚠️ Не спамьте! Подождите немного перед следующим сообщением.\n"
+        f"Вы заблокированы на {minutes} минут."
+    )
+
+# -------------------- MEDIA COLLECTION FUNCTIONS --------------------
+
+def init_user_media_collection(user_id):
+    if user_id not in user_media_collections:
+        user_media_collections[user_id] = {
+            'homework': [],
+            'notification': [],
+            'suggestion': [],
+            'global_notification': []
+        }
+
+def add_to_media_collection(user_id, media_type, media_data):
+    init_user_media_collection(user_id)
+    user_media_collections[user_id][media_type].append(media_data)
+
+def clear_media_collection(user_id, media_type):
+    if user_id in user_media_collections:
+        user_media_collections[user_id][media_type] = []
+
+def get_media_collection(user_id, media_type):
+    init_user_media_collection(user_id)
+    return user_media_collections[user_id][media_type]
+
+# -------------------- USER RIGHTS CHECK FUNCTIONS --------------------
+
+def can_send_homework(user_id, group_name=None):
+    user = get_user(user_id)
+    if not user: return False
+    if user_id == DEVELOPER_ID: return True
+    if user['can_send_homework'] == 1: return True
+    if group_name and user['group_name'] == group_name:
+        starosta = get_group_role(group_name, ROLE_STAROSTA)
+        if starosta and starosta['user_id'] == user_id:
+            return True
+    return False
+
+def can_send_notifications(user_id, group_name=None):
+    user = get_user(user_id)
+    if not user: return False
+    if user_id == DEVELOPER_ID: return True
+    if user['can_send_notifications'] == 1: return True
+    if group_name and user['group_name'] == group_name:
+        starosta = get_group_role(group_name, ROLE_STAROSTA)
+        if starosta and starosta['user_id'] == user_id:
+            return True
+    return False
+
+def can_send_global_notifications(user_id):
+    user = get_user(user_id)
+    if not user: return False
+    if user_id == DEVELOPER_ID: return True
+    return user['can_send_global_notifications'] == 1
+
+def can_delete_homework(user_id, group_name=None):
+    user = get_user(user_id)
+    if not user: return False
+    if user_id == DEVELOPER_ID: return True
+    if user['can_delete_homework'] == 1: return True
+    if group_name and user['group_name'] == group_name:
+        starosta = get_group_role(group_name, ROLE_STAROSTA)
+        if starosta and starosta['user_id'] == user_id:
+            return True
+    return False
+
+def can_delete_notifications(user_id, group_name=None):
+    user = get_user(user_id)
+    if not user: return False
+    if user_id == DEVELOPER_ID: return True
+    if user['can_delete_notifications'] == 1: return True
+    if group_name and user['group_name'] == group_name:
+        starosta = get_group_role(group_name, ROLE_STAROSTA)
+        if starosta and starosta['user_id'] == user_id:
+            return True
+    return False
+
+def can_delete_suggestions(user_id):
+    return user_id == DEVELOPER_ID
+
+def can_manage_users(user_id):
+    return user_id == DEVELOPER_ID
+
+def get_user_role_display(user_id):
+    user = get_user(user_id)
+    if not user: return "Студент"
+    if user_id == DEVELOPER_ID: return "Разработчик"
+    if user['custom_role_name']: return user['custom_role_name']
+    if user['group_name']:
+        starosta = get_group_role(user['group_name'], ROLE_STAROSTA)
+        if starosta and starosta['user_id'] == user_id: return "Староста"
+        deputy = get_group_role(user['group_name'], ROLE_DEPUTY_STAROSTA)
+        if deputy and deputy['user_id'] == user_id: return "Зам старосты"
+    role_map = {ROLE_STAROSTA: "Староста", ROLE_DEPUTY_STAROSTA: "Зам старосты", ROLE_STUDENT: "Студент"}
+    return role_map.get(user['role'], "Студент")
+
+# -------------------- CONTACT FUNCTIONS --------------------
+
+async def contact_developer(update: Update):
+    try:
+        await update.message.reply_text(
+            "👨‍💻 <b>Связь с разработчиком</b>\n\n"
+            "📞 Telegram: @imya_polbzovatela\n"
+            "💬 По всем вопросам работы бота обращайтесь к разработчику",
+            parse_mode='HTML'
+        )
+    except Exception as e:
+        print(f"ОШИБКА: Ошибка в contact_developer: {e}")
+
+async def contact_starosta(update: Update, group_name: str):
+    try:
+        starosta = get_group_role(group_name, ROLE_STAROSTA)
+        if starosta:
+            username = f"@{starosta['username']}" if starosta['username'] else starosta['first_name']
+            await update.message.reply_text(
+                f"👑 <b>Связь со старостой группы {group_name}</b>\n\n"
+                f"👤 Имя: {starosta['first_name']}\n"
+                f"📞 Telegram: {username}",
+                parse_mode='HTML'
+            )
+        else:
+            await update.message.reply_text(
+                f"❌ Для группы {group_name} староста еще не назначен.\n"
+                f"Обратитесь к разработчику для назначения старосты."
+            )
+    except Exception as e:
+        print(f"ОШИБКА: Ошибка в contact_starosta: {e}")
+
+async def contact_deputy_starosta(update: Update, group_name: str):
+    try:
+        deputy = get_group_role(group_name, ROLE_DEPUTY_STAROSTA)
+        if deputy:
+            username = f"@{deputy['username']}" if deputy['username'] else deputy['first_name']
+            await update.message.reply_text(
+                f"👑 <b>Связь с замом старосты группы {group_name}</b>\n\n"
+                f"👤 Имя: {deputy['first_name']}\n"
+                f"📞 Telegram: {username}",
+                parse_mode='HTML'
+            )
+        else:
+            await update.message.reply_text(
+                f"❌ Для группы {group_name} зам старосты еще не назначен.\n"
+                f"Обратитесь к разработчику для назначения зама старосты."
+            )
+    except Exception as e:
+        print(f"ОШИБКА: Ошибка в contact_deputy_starosta: {e}")
+
+# -------------------- SCHEDULE API FUNCTIONS --------------------
+
+def fetch_schedule_data():
+    try:
+        url = "https://pmklink.ru/schedule/request.php?token=Uf40-ZZkp-t5Nv-ZD5v"
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+        }
+        print("ЛОГ: Загрузка расписания с API...")
+        resp = requests.get(url, headers=headers, timeout=15)
+        resp.raise_for_status()
+        data = resp.json()
+        print(f"ЛОГ: Успешно загружено расписания. Занятий: {len(data)}")
+        return data
+    except requests.exceptions.RequestException as e:
+        print(f"ОШИБКА: Ошибка сети при загрузке расписания: {e}")
+        return None
+    except Exception as e:
+        print(f"ОШИБКА: Неизвестная ошибка при загрузке расписания: {e}")
+        return None
+
+def fetch_groups_list():
+    global ALL_GROUPS, groups_cache, last_groups_check
+    try:
+        schedule_data = fetch_schedule_data()
+        if not schedule_data:
+            return ALL_GROUPS
+        
+        groups = set()
+        for lesson in schedule_data:
+            if 'group' in lesson:
+                groups.add(lesson['group'])
+        
+        def group_sort_key(group_name):
+            try:
+                parts = group_name.split('-')
+                if len(parts) > 1:
+                    number_part = parts[1]
+                    for char in number_part:
+                        if char.isdigit():
+                            course = int(char)
+                            return (course, group_name)
+            except:
+                pass
+            return (0, group_name)
+        
+        sorted_groups = sorted(groups, key=group_sort_key)
+        ALL_GROUPS = sorted_groups
+        groups_cache = sorted_groups
+        last_groups_check = datetime.now(YEKATERINBURG_TZ)
+        print(f"ЛОГ: Обновлен список групп. Всего групп: {len(ALL_GROUPS)}")
+        return ALL_GROUPS
+    except Exception as e:
+        print(f"ОШИБКА: Ошибка при обновлении списка групп: {e}")
+        return ALL_GROUPS
+
+def fetch_teachers_list():
+    global teachers_cache, last_teachers_check
+    try:
+        schedule_data = fetch_schedule_data()
+        if not schedule_data:
+            return teachers_cache
+        
+        teachers = set()
+        for lesson in schedule_data:
+            teacher = lesson.get('teacher', '').strip()
+            if teacher and teacher != 'Не указан':
+                teachers.add(teacher)
+        
+        sorted_teachers = sorted(teachers)
+        teachers_cache = sorted_teachers
+        last_teachers_check = datetime.now(YEKATERINBURG_TZ)
+        print(f"ЛОГ: Обновлен список преподавателей. Всего преподавателей: {len(teachers_cache)}")
+        return teachers_cache
+    except Exception as e:
+        print(f"ОШИБКА: Ошибка при обновлении списка преподавателей: {e}")
+        return teachers_cache
+
+def parse_lesson_data(lesson):
+    try:
+        if not isinstance(lesson, dict):
+            return None
+        lesson_data = {}
+        lesson_data['group'] = lesson.get('group', 'Не указана')
+        lesson_data['number'] = lesson.get('number', 0)
+        lesson_data['type'] = lesson.get('type', 'Занятие')
+        lesson_data['subject'] = lesson.get('subject', 'Не указано')
+        lesson_data['campus'] = lesson.get('campus', 'Не указан')
+        lesson_data['room'] = lesson.get('room', 'Не указана')
+        lesson_data['teacher'] = lesson.get('teacher', 'Не указан')
+        
+        start_time_str = lesson.get('startTime', '')
+        end_time_str = lesson.get('endTime', '')
+        
+        if start_time_str:
+            try:
+                start_time_utc = datetime.fromisoformat(start_time_str.replace('Z', '+00:00'))
+                start_time_yekat = start_time_utc.astimezone(YEKATERINBURG_TZ)
+                lesson_data['date'] = start_time_yekat.strftime('%Y-%m-%d')
+                lesson_data['start_time'] = start_time_yekat.strftime('%H:%M')
+                lesson_data['datetime'] = start_time_yekat
+            except:
+                lesson_data['date'] = 'Не указана'
+                lesson_data['start_time'] = 'Не указано'
+        
+        if end_time_str:
+            try:
+                end_time_utc = datetime.fromisoformat(end_time_str.replace('Z', '+00:00'))
+                end_time_yekat = end_time_utc.astimezone(YEKATERINBURG_TZ)
+                lesson_data['end_time'] = end_time_yekat.strftime('%H:%M')
+            except:
+                lesson_data['end_time'] = 'Не указано'
+        
+        return lesson_data
+    except Exception as e:
+        print(f"ОШИБКА: Не удалось распарсить данные занятия: {e}")
+        return None
+
+def filter_lessons_by_date(lessons, target_date):
+    try:
+        filtered = []
+        for lesson in lessons:
+            parsed = parse_lesson_data(lesson)
+            if parsed and 'datetime' in parsed:
+                if parsed['datetime'].date() == target_date:
+                    filtered.append(parsed)
+        return filtered
+    except Exception as e:
+        print(f"ОШИБКА: Ошибка при фильтрации занятий: {e}")
+        return []
+
+def filter_lessons_by_week(lessons, start_date, end_date):
+    try:
+        filtered = []
+        for lesson in lessons:
+            parsed = parse_lesson_data(lesson)
+            if parsed and 'datetime' in parsed:
+                if start_date <= parsed['datetime'].date() <= end_date:
+                    filtered.append(parsed)
+        return filtered
+    except Exception as e:
+        print(f"ОШИБКА: Ошибка при фильтрации занятий на неделю: {e}")
+        return []
+
+def filter_lessons_by_teacher(lessons, teacher_name):
+    try:
+        filtered = []
+        for lesson in lessons:
+            parsed = parse_lesson_data(lesson)
+            if parsed and parsed['teacher'].strip() == teacher_name.strip():
+                filtered.append(parsed)
+        return filtered
+    except Exception as e:
+        print(f"ОШИБКА: Ошибка при фильтрации по преподавателю: {e}")
+        return []
+
+def get_type_emoji(lesson_type):
+    emoji_map = {
+        'Занятие': '📚', 'Практика': '🔬', 'Лекция': '📖', 'Экзамен': '📝',
+        'Консультация': '💬', 'Лабораторная работа': '⚗️', 'Семинар': '💡', 'Зачет': '✅'
+    }
+    return emoji_map.get(lesson_type, '📚')
+
+def find_merged_groups(current_lesson, all_parsed_lessons):
+    merged = []
+    current_group = current_lesson['group']
+    for lesson in all_parsed_lessons:
+        if (lesson['group'] != current_group and 
+            lesson['datetime'].date() == current_lesson['datetime'].date() and 
+            lesson['start_time'] == current_lesson['start_time'] and 
+            lesson['end_time'] == current_lesson['end_time'] and 
+            lesson['room'] == current_lesson['room'] and 
+            lesson['campus'] == current_lesson['campus'] and 
+            lesson['teacher'] == current_lesson['teacher'] and 
+            lesson['subject'] == current_lesson['subject'] and 
+            lesson['number'] == current_lesson['number']):
+            merged.append(lesson['group'])
+    return merged
+
+def format_schedule(lessons, title, all_parsed_lessons=None):
+    try:
+        if not lessons:
+            return f"✅ Нет занятий для {title.split('(')[-1].split(')')[0]}"
+        lessons.sort(key=lambda x: (x.get('datetime', datetime.min), x.get('number', 0)))
+        result = [f"<b>{title}</b>\n"]
+        current_date = None
+        for lesson in lessons:
+            try:
+                if 'datetime' in lesson:
+                    date_str = lesson['datetime'].strftime('%d.%m.%Y')
+                    day_names = ['Понедельник', 'Вторник', 'Среда', 'Четверг', 'Пятница', 'Суббота', 'Воскресенье']
+                    day_of_week = day_names[lesson['datetime'].weekday()]
+                    if date_str != current_date:
+                        current_date = date_str
+                        result.append(f"\n📅 <b>{date_str} ({day_of_week})</b>")
+                    type_emoji = get_type_emoji(lesson['type'])
+                    start_time = lesson.get('start_time', '❓')
+                    end_time = lesson.get('end_time', '❓')
+                    lesson_text = (
+                        f"    {type_emoji} {lesson['type']}\n"
+                        f"    ⏰ {start_time}-{end_time} | {lesson['number']} пара\n"
+                        f"    📚 {lesson['subject']}\n"
+                        f"    👨‍🏫 {lesson['teacher']}\n"
+                        f"    🚪 {lesson['room']}({lesson['campus']})\n"
+                    )
+                    if all_parsed_lessons:
+                        merged = find_merged_groups(lesson, all_parsed_lessons)
+                        if merged:
+                            lesson_text += f"    👥 Совмещена с группой {', '.join(merged)}\n"
+                    result.append(lesson_text)
+            except Exception as e:
+                print(f"ОШИБКА: Не удалось отформатировать пару: {e}")
+                continue
+        result.append(f"\n📊 <b>Всего занятий:</b> {len(lessons)}")
+        return "\n".join(result)
+    except Exception as e:
+        return f"❌ Ошибка при формировании расписания: {str(e)}"
+
+def format_teacher_schedule(lessons, title, teacher_name):
+    try:
+        if not lessons:
+            return f"✅ Нет занятий для преподавателя {teacher_name} на выбранный период"
+        lessons.sort(key=lambda x: (x.get('datetime', datetime.min), x.get('number', 0)))
+        result = [f"<b>{title}</b>\n"]
+        current_date = None
+        for lesson in lessons:
+            try:
+                if 'datetime' in lesson:
+                    date_str = lesson['datetime'].strftime('%d.%m.%Y')
+                    day_names = ['Понедельник', 'Вторник', 'Среда', 'Четверг', 'Пятница', 'Суббота', 'Воскресенье']
+                    day_of_week = day_names[lesson['datetime'].weekday()]
+                    if date_str != current_date:
+                        current_date = date_str
+                        result.append(f"\n📅 <b>{date_str} ({day_of_week})</b>")
+                    type_emoji = get_type_emoji(lesson['type'])
+                    start_time = lesson.get('start_time', '❓')
+                    end_time = lesson.get('end_time', '❓')
+                    lesson_text = (
+                        f"    {type_emoji} {lesson['type']}\n"
+                        f"    ⏰ {start_time}-{end_time} | {lesson['number']} пара\n"
+                        f"    📚 {lesson['subject']}\n"
+                        f"    👨‍🏫 {lesson['teacher']}\n"
+                        f"    🚪 {lesson['room']} ({lesson['campus']})\n"
+                        f"    👥 <b>{lesson['group']}</b>\n"
+                    )
+                    result.append(lesson_text)
+            except Exception as e:
+                print(f"ОШИБКА: Не удалось отформатировать пару: {e}")
+                continue
+        result.append(f"\n📊 <b>Всего занятий:</b> {len(lessons)}")
+        return "\n".join(result)
+    except Exception as e:
+        return f"❌ Ошибка при формировании расписания преподавателя: {str(e)}"
+
+def get_schedule(period, group_name):
+    try:
+        global schedule_cache, last_schedule_check
+        now = datetime.now(YEKATERINBURG_TZ)
+        if last_schedule_check is None or (now - last_schedule_check).total_seconds() > 3600:
+            print(f"ЛОГ: Обновляем кэш расписания для группы {group_name}")
+            schedule_data = fetch_schedule_data()
+            if schedule_data:
+                schedule_cache = schedule_data
+                last_schedule_check = now
+                print("ЛОГ: Расписание обновлено из API")
+            else:
+                print("ЛОГ: Не удалось обновить расписание, используем кэш если есть")
+        else:
+            schedule_data = schedule_cache
+            print("ЛОГ: Используем кэшированное расписание")
+        
+        if not schedule_data:
+            return "❌ Не удалось загрузить расписание. Попробуйте позже."
+        
+        group_lessons = []
+        for lesson in schedule_data:
+            if lesson.get('group') == group_name:
+                parsed = parse_lesson_data(lesson)
+                if parsed and 'datetime' in parsed:
+                    group_lessons.append(parsed)
+        
+        if not group_lessons:
+            return f"❌ Нет расписания для группы {group_name}"
+        
+        all_parsed_lessons = []
+        for lesson in schedule_data:
+            parsed = parse_lesson_data(lesson)
+            if parsed and 'datetime' in parsed:
+                all_parsed_lessons.append(parsed)
+        
+        today_yekat = datetime.now(YEKATERINBURG_TZ).date()
+        
+        if period == '📅 Сегодня':
+            filtered_lessons = [l for l in group_lessons if l['datetime'].date() == today_yekat]
+            title = f"📅 Расписание на сегодня ({today_yekat.strftime('%d.%m.%Y')}) - {group_name}"
+            return format_schedule(filtered_lessons, title, all_parsed_lessons)
+            
+        elif period == '📅 Завтра':
+            tomorrow_yekat = today_yekat + timedelta(days=1)
+            filtered_lessons = [l for l in group_lessons if l['datetime'].date() == tomorrow_yekat]
+            title = f"📅 Расписание на завтра ({tomorrow_yekat.strftime('%d.%m.%Y')}) - {group_name}"
+            return format_schedule(filtered_lessons, title, all_parsed_lessons)
+            
+        elif period == '📅 Неделя':
+            start_of_week = today_yekat - timedelta(days=today_yekat.weekday())
+            end_of_week = start_of_week + timedelta(days=6)
+            if today_yekat.weekday() >= 5:
+                start_of_week += timedelta(days=7)
+                end_of_week += timedelta(days=7)
+            filtered_lessons = [l for l in group_lessons if start_of_week <= l['datetime'].date() <= end_of_week]
+            title = f"📅 Расписание на неделю ({start_of_week.strftime('%d.%m')}-{end_of_week.strftime('%d.%m')}) - {group_name}"
+            return format_schedule(filtered_lessons, title, all_parsed_lessons)
+        else:
+            return None, split_group_schedule_by_days(group_lessons, group_name, all_parsed_lessons)
+    except Exception as e:
+        print(f"ОШИБКА: Произошла ошибка при получения расписания: {str(e)}")
+        return f"❌ Произошла ошибка при загрузке расписания: {str(e)}"
+
+def get_teacher_schedule(period, teacher_name):
+    try:
+        global schedule_cache, last_schedule_check
+        now = datetime.now(YEKATERINBURG_TZ)
+        if last_schedule_check is None or (now - last_schedule_check).total_seconds() > 3600:
+            print(f"ЛОГ: Обновляем кэш расписания для преподавателя {teacher_name}")
+            schedule_data = fetch_schedule_data()
+            if schedule_data:
+                schedule_cache = schedule_data
+                last_schedule_check = now
+                print("ЛОГ: Расписание обновлено из API")
+            else:
+                print("ЛОГ: Не удалось обновить расписание, используем кэш если есть")
+        else:
+            schedule_data = schedule_cache
+            print("ЛОГ: Используем кэшированное расписание")
+        
+        if not schedule_data:
+            return None, "❌ Не удалось загрузить расписание. Попробуйте позже."
+        
+        all_parsed_lessons = []
+        for lesson in schedule_data:
+            if lesson.get('teacher', '').strip().lower() == teacher_name.strip().lower():
+                parsed = parse_lesson_data(lesson)
+                if parsed and 'datetime' in parsed:
+                    all_parsed_lessons.append(parsed)
+        
+        if not all_parsed_lessons:
+            return None, f"❌ Нет расписания для преподавателя {teacher_name}"
+        
+        today_yekat = datetime.now(YEKATERINBURG_TZ).date()
+        
+        if period == '📅 Сегодня':
+            filtered_lessons = [l for l in all_parsed_lessons if l['datetime'].date() == today_yekat]
+            title = f"📅 Расписание на сегодня ({today_yekat.strftime('%d.%m.%Y')}) для преподавателя {teacher_name}"
+        elif period == '📅 Завтра':
+            tomorrow_yekat = today_yekat + timedelta(days=1)
+            filtered_lessons = [l for l in all_parsed_lessons if l['datetime'].date() == tomorrow_yekat]
+            title = f"📅 Расписание на завтра ({tomorrow_yekat.strftime('%d.%m.%Y')}) для преподавателя {teacher_name}"
+        elif period == '📅 Неделя':
+            start_of_week = today_yekat - timedelta(days=today_yekat.weekday())
+            end_of_week = start_of_week + timedelta(days=6)
+            if today_yekat.weekday() >= 5:
+                start_of_week += timedelta(days=7)
+                end_of_week += timedelta(days=7)
+            filtered_lessons = [l for l in all_parsed_lessons if start_of_week <= l['datetime'].date() <= end_of_week]
+            title = f"📅 Расписание на неделю ({start_of_week.strftime('%d.%m')}-{end_of_week.strftime('%d.%m')}) для преподавателя {teacher_name}"
+        else:
+            filtered_lessons = all_parsed_lessons
+            title = f"📅 Все расписание для преподавателя {teacher_name}"
+        
+        filtered_lessons.sort(key=lambda x: x['datetime'])
+        return filtered_lessons, format_teacher_schedule(filtered_lessons, title, teacher_name)
+    except Exception as e:
+        print(f"ОШИБКА: Произошла ошибка при получения расписания преподавателя: {str(e)}")
+        return None, f"❌ Произошла ошибка при загрузке расписания: {str(e)}"
+
+def split_group_schedule_by_days(lessons, group_name, all_parsed_lessons):
+    try:
+        if not lessons: return []
+        lessons.sort(key=lambda x: x['datetime'])
+        days = {}
+        for lesson in lessons:
+            date_key = lesson['datetime'].date()
+            if date_key not in days:
+                days[date_key] = []
+            days[date_key].append(lesson)
+        
+        messages = []
+        for date in sorted(days.keys()):
+            day_lessons = days[date]
+            date_str = date.strftime('%d.%m.%Y')
+            day_name = ['Понедельник', 'Вторник', 'Среда', 'Четверг', 'Пятница', 'Суббота', 'Воскресенье'][date.weekday()]
+            title = f"📅 <b>{date_str} ({day_name})</b> — Группа {group_name}"
+            formatted = format_schedule(day_lessons, title, all_parsed_lessons)
+            messages.append(formatted)
+        return messages
+    except Exception as e:
+        print(f"ОШИБКА: Ошибка при разбиении расписания группы по дням: {e}")
+        return []
+
+def split_teacher_schedule_by_days(lessons, teacher_name):
+    try:
+        if not lessons: return []
+        lessons.sort(key=lambda x: x['datetime'])
+        days = {}
+        for lesson in lessons:
+            date_key = lesson['datetime'].date()
+            if date_key not in days:
+                days[date_key] = []
+            days[date_key].append(lesson)
+        
+        messages = []
+        for date in sorted(days.keys()):
+            day_lessons = days[date]
+            date_str = date.strftime('%d.%m.%Y')
+            day_name = ['Понедельник', 'Вторник', 'Среда', 'Четверг', 'Пятница', 'Суббота', 'Воскресенье'][date.weekday()]
+            title = f"📅 <b>{date_str} ({day_name})</b> — {teacher_name}"
+            formatted = format_teacher_schedule(day_lessons, title, teacher_name)
+            messages.append(formatted)
+        return messages
+    except Exception as e:
+        print(f"ОШИБКА: Ошибка при разбиении расписания по дням: {e}")
+        return []
+
+def get_all_teacher_schedule_by_weeks(teacher_name):
+    try:
+        global schedule_cache
+        if not schedule_cache:
+            schedule_data = fetch_schedule_data()
+            if not schedule_data: return []
+            schedule_cache = schedule_data
+        
+        teacher_lessons = filter_lessons_by_teacher(schedule_cache, teacher_name)
+        if not teacher_lessons: return []
+        
+        parsed_lessons = []
+        for lesson in teacher_lessons:
+            parsed = parse_lesson_data(lesson)
+            if parsed and 'datetime' in parsed:
+                parsed_lessons.append(parsed)
+        
+        parsed_lessons.sort(key=lambda x: x['datetime'])
+        weeks = {}
+        for lesson in parsed_lessons:
+            lesson_date = lesson['datetime'].date()
+            start_of_week = lesson_date - timedelta(days=lesson_date.weekday())
+            week_key = start_of_week.strftime('%d.%m.%Y')
+            if week_key not in weeks:
+                weeks[week_key] = []
+            weeks[week_key].append(lesson)
+        
+        result = []
+        for week_start, lessons in sorted(weeks.items()):
+            start_date = datetime.strptime(week_start, '%d.%m.%Y').date()
+            end_date = start_date + timedelta(days=6)
+            title = f"📅 Неделя {start_date.strftime('%d.%m')} - {end_date.strftime('%d.%m')} для преподавателя {teacher_name}"
+            formatted = format_teacher_schedule(lessons, title, teacher_name)
+            result.append(formatted)
+        return result
+    except Exception as e:
+        print(f"ОШИБКА: Ошибка при группировке расписания по неделям: {e}")
+        return []
+
+async def check_schedule_changes(context: ContextTypes.DEFAULT_TYPE):
+    global schedule_cache, last_schedule_check, teachers_cache
+    print("ЛОГ: Проверка изменений в расписании...")
+    new_schedule = fetch_schedule_data()
+    if not new_schedule: return
+
+    if schedule_cache:
+        old_parsed = [parse_lesson_data(l) for l in schedule_cache if parse_lesson_data(l) and 'datetime' in parse_lesson_data(l)]
+        new_parsed = [parse_lesson_data(l) for l in new_schedule if parse_lesson_data(l) and 'datetime' in parse_lesson_data(l)]
+        
+        old_dict = {(l['group'], l['datetime'].date(), l['start_time']): l for l in old_parsed}
+        new_dict = {(l['group'], l['datetime'].date(), l['start_time']): l for l in new_parsed}
+        
+        changes = []
+        for key, new_lesson in new_dict.items():
+            old_lesson = old_dict.get(key)
+            if old_lesson:
+                if (old_lesson['subject'] != new_lesson['subject'] or
+                    old_lesson['teacher'] != new_lesson['teacher'] or
+                    old_lesson['room'] != new_lesson['room'] or
+                    old_lesson['campus'] != new_lesson['campus']):
+                    changes.append(('changed', old_lesson, new_lesson))
+            else:
+                changes.append(('added', new_lesson))
+        
+        for key, old_lesson in old_dict.items():
+            if key not in new_dict:
+                changes.append(('removed', old_lesson))
+        
+        if changes:
+            for change in changes:
+                if change[0] == 'changed':
+                    _, old, new = change
+                    group = new['group']
+                    old_text = (
+                        f"    📚 {old['type']}\n"
+                        f"    ⏰ {old['start_time']}-{old['end_time']} | {old['number']} пара\n"
+                        f"    📚 {old['subject']}\n"
+                        f"    👨‍🏫 {old['teacher']}\n"
+                        f"    🚪 {old['room']}({old['campus']})"
+                    )
+                    new_text = (
+                        f"    📚 {new['type']}\n"
+                        f"    ⏰ {new['start_time']}-{new['end_time']} | {new['number']} пара\n"
+                        f"    📚 {new['subject']}\n"
+                        f"    👨‍🏫 {new['teacher']}\n"
+                        f"    🚪 {new['room']}({new['campus']})"
+                    )
+                    message = f"🔄 Изменение в расписании (замена):\n\n{old_text}\n\nна:\n\n{new_text}"
+                    conn = get_db_connection()
+                    users = conn.execute('SELECT user_id FROM users WHERE group_name = ?', (group,)).fetchall()
+                    conn.close()
+                    for user in users:
+                        try:
+                            await context.bot.send_message(user['user_id'], message, parse_mode='HTML')
+                        except Exception as e:
+                            print(f"ОШИБКА: Не удалось отправить уведомление об изменении: {e}")
+    
+    schedule_cache = new_schedule
+    last_schedule_check = datetime.now(YEKATERINBURG_TZ)
+    fetch_teachers_list()
+
+async def send_daily_schedule(context: ContextTypes.DEFAULT_TYPE):
+    global schedule_cache
+    if not schedule_cache:
+        schedule_data = fetch_schedule_data()
+        if not schedule_data: return
+        schedule_cache = schedule_data
+    
+    all_parsed = [parse_lesson_data(l) for l in schedule_cache if parse_lesson_data(l) and 'datetime' in parse_lesson_data(l)]
+    groups_lessons = {}
+    for lesson in all_parsed:
+        group_name = lesson['group']
+        if group_name not in groups_lessons:
+            groups_lessons[group_name] = []
+        groups_lessons[group_name].append(lesson)
+    
+    for group_name, lessons in groups_lessons.items():
+        tomorrow_yekat = (datetime.now(YEKATERINBURG_TZ) + timedelta(days=1)).date()
+        tomorrow_lessons = [l for l in lessons if l['datetime'].date() == tomorrow_yekat]
+        if tomorrow_lessons:
+            schedule_text = format_schedule(tomorrow_lessons, f"📅 Расписание на завтра ({group_name})", all_parsed)
+            homeworks = get_homeworks(group_name)
+            if homeworks:
+                schedule_text += "\n\n📝 <b>Домашние задания:</b>\n"
+                for hw in homeworks[:3]:
+                    schedule_text += f"• {hw['subject']}: {hw['task']} (до {hw['deadline']})\n"
+            
+            users = get_db_connection().execute('SELECT user_id FROM users WHERE group_name = ?', (group_name,)).fetchall()
+            for user in users:
+                try:
+                    settings = get_user_notification_settings(user['user_id'])
+                    if settings and settings['tomorrow_schedule']:
+                        await context.bot.send_message(user['user_id'], schedule_text, parse_mode='HTML')
+                except Exception as e:
+                    print(f"ОШИБКА: {e}")
+
+async def send_morning_schedule(context: ContextTypes.DEFAULT_TYPE):
+    global schedule_cache
+    if not schedule_cache:
+        schedule_data = fetch_schedule_data()
+        if not schedule_data: return
+        schedule_cache = schedule_data
+    
+    all_parsed = [parse_lesson_data(l) for l in schedule_cache if parse_lesson_data(l) and 'datetime' in parse_lesson_data(l)]
+    groups_lessons = {}
+    for lesson in all_parsed:
+        group_name = lesson['group']
+        if group_name not in groups_lessons:
+            groups_lessons[group_name] = []
+        groups_lessons[group_name].append(lesson)
+    
+    for group_name, lessons in groups_lessons.items():
+        today_lessons = [l for l in lessons if l['datetime'].date() == datetime.now(YEKATERINBURG_TZ).date()]
+        if today_lessons:
+            schedule_text = format_schedule(today_lessons, f"📅 Расписание на сегодня ({group_name})", all_parsed)
+            users = get_db_connection().execute('SELECT user_id FROM users WHERE group_name = ?', (group_name,)).fetchall()
+            for user in users:
+                try:
+                    settings = get_user_notification_settings(user['user_id'])
+                    if settings and settings['today_schedule']:
+                        await context.bot.send_message(user['user_id'], schedule_text, parse_mode='HTML')
+                except Exception as e:
+                    print(f"ОШИБКА: {e}")
+
+# -------------------- CALL SCHEDULE DISPLAY --------------------
+
+async def show_call_schedule_menu(update: Update, user_id: int):
+    try:
+        keyboard = [
+            ['Понедельник-Пятница', 'Суббота'],
+            ['Сокращенный день'],
+            ['🔙 Назад']
+        ]
+        reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+        await update.message.reply_text("🔔 Выберите тип расписания звонков:", reply_markup=reply_markup)
+    except Exception as e:
+        print(f"ОШИБКА: {e}")
+
+async def handle_call_schedule_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        text = update.message.text
+        if text == 'Понедельник-Пятница':
+            schedule_text = format_call_schedule(REGULAR_CALL_SCHEDULE, "Понедельник-Пятница")
+        elif text == 'Суббота':
+            schedule_text = format_call_schedule(SATURDAY_CALL_SCHEDULE, "Суббота")
+        elif text == 'Сокращенный день':
+            schedule_text = format_call_schedule(SHORT_DAY_CALL_SCHEDULE, "Сокращенный день")
+        else:
+            return
+        await update.message.reply_text(schedule_text, parse_mode='HTML')
+        await show_main_menu(update, update.effective_user.id)
+    except Exception as e:
+        print(f"ОШИБКА: {e}")
+
+def format_call_schedule(schedule, day_type):
+    """
+    Форматирует расписание звонков:
+    - 5 минут: выводится как есть (внутри пары)
+    - 10 минут: просто отступ (пустая строка между парами)
+    - большая перемена: выводится блоком (не трогается)
+    """
+    result = [f"🔔 <b>РАСПИСАНИЕ ЗВОНКОВ</b>\n📅 <i>{day_type}</i>\n"]
+    
+    if isinstance(schedule, list):
+        for item in schedule:
+            if item['type'] == 'lesson':
+                if item['part'] == 1:
+                    result.append(f"📚 <b>{item['number']} ПАРА</b>")
+                    result.append(f"  ├ 🟢 <b>{item['start']} - {item['end']}</b> <i>(1-я часть)</i>")
+                else:
+                    result.append(f"  └ 🟢 <b>{item['start']} - {item['end']}</b> <i>(2-я часть)</i>")
+            else:  # break
+                try:
+                    duration = int(item.get('duration', 0))
+                except (ValueError, TypeError):
+                    duration = 0
+                
+                if duration == 5:
+                    result.append(f"  ├ ☕ {item['start']} - {item['end']} <i>({duration} мин)</i>")
+                elif duration == 10:
+                    result.append("")
+                else:
+                    duration_str = f"({duration} мин)" if duration else ""
+                    result.append(f"\n🛌 <b>Большая перемена</b>\n  └ ⏰ <b>{item['start']} - {item['end']}</b> <i>{duration_str}</i>\n")
+    else:
+        for key, value in schedule.items():
+            if isinstance(key, int):
+                result.append(f"📚 <b>{key} ПАРА</b>\n  └ 🟢 <b>{value['start']} - {value['end']}</b>")
+            else:
+                try:
+                    duration = int(value.get('duration', 0))
+                except (ValueError, TypeError):
+                    duration = 0
+                
+                if duration == 5:
+                    result.append(f"  ├ ☕ {value['start']} - {value['end']} <i>({duration} мин)</i>")
+                elif duration == 10:
+                    result.append("")
+                else:
+                    duration_str = f"({duration} мин)" if duration else ""
+                    result.append(f"\n🛌 <b>Большая перемена:</b> ⏰ <b>{value['start']} - {value['end']}</b> <i>{duration_str}</i>\n")
+    
+    formatted_text = "\n".join(result)
+    while "\n\n\n" in formatted_text:
+        formatted_text = formatted_text.replace("\n\n\n", "\n\n")
+    return formatted_text
+
+# -------------------- LESSON NOTIFICATION FUNCTIONS --------------------
+
+async def check_lesson_notifications(context: ContextTypes.DEFAULT_TYPE):
+    try:
+        global schedule_cache
+        if not schedule_cache: return
+        now = datetime.now(YEKATERINBURG_TZ)
+        today = now.date()
+        
+        groups_lessons = {}
+        for lesson in schedule_cache:
+            parsed = parse_lesson_data(lesson)
+            if parsed and 'datetime' in parsed and parsed['datetime'].date() == today:
+                group_name = parsed['group']
+                if group_name not in groups_lessons:
+                    groups_lessons[group_name] = []
+                groups_lessons[group_name].append(parsed)
+        
+        for group_name, lessons in groups_lessons.items():
+            for lesson in lessons:
+                lesson_time = lesson['datetime']
+                time_diff = (lesson_time - now).total_seconds()
+                if 240 <= time_diff <= 300:
+                    await send_lesson_notification(context.bot, group_name, lesson)
+    except Exception as e:
+        print(f"ОШИБКА: {e}")
+
+async def send_lesson_notification(bot, group_name, lesson):
+    try:
+        notification_text = (
+            f"🕓 <b>Через 5 минут начинается пара</b>\n\n"
+            f"📚 <b>Предмет:</b> {lesson['subject']}\n"
+            f"👨‍🏫 <b>Преподаватель:</b> {lesson['teacher']}\n"
+            f"🚪 <b>Кабинет:</b> {lesson['room']} ({lesson['campus']})\n"
+            f"⏰ <b>Время:</b> {lesson['start_time']}-{lesson['end_time']}\n"
+            f"📖 <b>Тип:</b> {lesson['type']}"
+        )
+        users = get_db_connection().execute('SELECT user_id FROM users WHERE group_name = ?', (group_name,)).fetchall()
+        for user in users:
+            try:
+                settings = get_user_notification_settings(user['user_id'])
+                if settings and settings['lesson_start']:
+                    await bot.send_message(user['user_id'], notification_text, parse_mode='HTML')
+            except Exception:
+                pass
+    except Exception as e:
+        print(f"ОШИБКА: {e}")
+
+# -------------------- NOTIFICATION SETTINGS --------------------
+
+async def show_notification_settings(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        user_id = update.effective_user.id
+        message = update.message if update.message else (update.callback_query.message if update.callback_query else None)
+        if not message:
+            await context.bot.send_message(user_id, "❌ Не удалось загрузить настройки.")
+            return ConversationHandler.END
+        
+        settings = get_user_notification_settings(user_id)
+        if not settings:
+            await message.reply_text("❌ Не удалось загрузить настройки.")
+            return ConversationHandler.END
+        
+        keyboard = [
+            [InlineKeyboardButton(f"🔔 Уведомления о начале пары: {'✅' if settings['lesson_start'] else '❌'}", callback_data='toggle_lesson_start')],
+            [InlineKeyboardButton(f"📝 Уведомления о новом ДЗ: {'✅' if settings['new_homework'] else '❌'}", callback_data='toggle_new_homework')],
+            [InlineKeyboardButton(f"📢 Важные уведомления: {'✅' if settings['important_notifications'] else '❌'}", callback_data='toggle_important_notifications')],
+            [InlineKeyboardButton(f"📅 Расписание на завтра вечером: {'✅' if settings['tomorrow_schedule'] else '❌'}", callback_data='toggle_tomorrow_schedule')],
+            [InlineKeyboardButton(f"🌅 Расписание на сегодня утром: {'✅' if settings['today_schedule'] else '❌'}", callback_data='toggle_today_schedule')],
+            [InlineKeyboardButton("✅ Готово", callback_data='done_notification_settings')]
+        ]
+        
+        await message.reply_text(
+            "🔧 <b>Настройки уведомлений</b>\n\nВыберите, какие уведомления вы хотите получать:",
+            parse_mode='HTML',
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+        return AWAITING_NOTIFICATION_SETTINGS
+    except Exception as e:
+        print(f"ОШИБКА: {e}")
+        return ConversationHandler.END
+
+async def handle_notification_settings_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        query = update.callback_query
+        await query.answer()
+        user_id = query.from_user.id
+        
+        if query.data == 'done_notification_settings':
+            await query.edit_message_text("✅ Настройки сохранены!")
+            await show_main_menu(update, user_id)
+            return ConversationHandler.END
+        
+        setting_map = {
+            'toggle_lesson_start': 'lesson_start',
+            'toggle_new_homework': 'new_homework',
+            'toggle_important_notifications': 'important_notifications',
+            'toggle_tomorrow_schedule': 'tomorrow_schedule',
+            'toggle_today_schedule': 'today_schedule'
+        }
+        
+        if query.data in setting_map:
+            current_settings = get_user_notification_settings(user_id)
+            new_value = 1 - current_settings[setting_map[query.data]]
+            update_user_notification_settings(user_id, setting_map[query.data], new_value)
+            
+            updated = get_user_notification_settings(user_id)
+            keyboard = [
+                [InlineKeyboardButton(f"🔔 Уведомления о начале пары: {'✅' if updated['lesson_start'] else '❌'}", callback_data='toggle_lesson_start')],
+                [InlineKeyboardButton(f"📝 Уведомления о новом ДЗ: {'✅' if updated['new_homework'] else '❌'}", callback_data='toggle_new_homework')],
+                [InlineKeyboardButton(f"📢 Важные уведомления: {'✅' if updated['important_notifications'] else '❌'}", callback_data='toggle_important_notifications')],
+                [InlineKeyboardButton(f"📅 Расписание на завтра вечером: {'✅' if updated['tomorrow_schedule'] else '❌'}", callback_data='toggle_tomorrow_schedule')],
+                [InlineKeyboardButton(f"🌅 Расписание на сегодня утром: {'✅' if updated['today_schedule'] else '❌'}", callback_data='toggle_today_schedule')],
+                [InlineKeyboardButton("✅ Готово", callback_data='done_notification_settings')]
+            ]
+            await query.edit_message_text(
+                "🔧 <b>Настройки уведомлений</b>\n\nВыберите, какие уведомления вы хотите получать:",
+                parse_mode='HTML',
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
+        return AWAITING_NOTIFICATION_SETTINGS
+    except Exception as e:
+        print(f"ОШИБКА: {e}")
+        return ConversationHandler.END
+
+# -------------------- BIRTHDAY FUNCTIONS --------------------
+
+async def ask_birthday_date(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    is_blocked, block_duration = check_spam(user_id)
+    if is_blocked:
+        await warn_user(update, block_duration)
+        return ConversationHandler.END
+    
+    user_data = get_user(user_id)
+    if not user_data or not user_data['group_name']:
+        await update.message.reply_text("❌ Сначала выберите свою группу!")
+        await show_main_menu(update, user_id)
+        return ConversationHandler.END
+    
+    await update.message.reply_text(
+        "🎂 <b>Установка дня рождения</b>\n\n"
+        "Введите дату своего рождения в формате <b>ДД.ММ</b>\n"
+        "Например: 15.09 (для 15 сентября)\n\n"
+        "Бот будет поздравлять вас в ваш день рождения и уведомлять вашу группу!",
+        parse_mode='HTML',
+        reply_markup=ReplyKeyboardMarkup([['❌ Отмена']], resize_keyboard=True)
+    )
+    return AWAITING_BIRTHDAY
+
+async def handle_birthday_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    text = update.message.text.strip()
+    if text == '❌ Отмена':
+        return await cancel_conversation(update, context)
+    
+    try:
+        if not re.match(r'^\d{1,2}\.\d{1,2}$', text):
+            raise ValueError("Неверный формат")
+        day, month = map(int, text.split('.'))
+        if month < 1 or month > 12 or day < 1 or day > 31:
+            raise ValueError("Некорректная дата")
+        birthday_date = f"{day:02d}.{month:02d}"
+        set_user_birthday(user_id, birthday_date)
+        await update.message.reply_text(
+            f"✅ Дата рождения установлена: {birthday_date}\n"
+            f"Теперь бот будет поздравлять вас каждый год!",
+            reply_markup=ReplyKeyboardRemove()
+        )
+    except Exception:
+        await update.message.reply_text("❌ Неверный формат! Введите ДД.ММ (например 15.09):", parse_mode='HTML')
+        return AWAITING_BIRTHDAY
+    
+    await show_main_menu(update, user_id)
+    return ConversationHandler.END
+
+async def check_birthdays(context: ContextTypes.DEFAULT_TYPE):
+    today_birthdays = get_today_birthdays()
+    for b_user in today_birthdays:
+        try:
+            await context.bot.send_message(
+                b_user['user_id'],
+                f"🎂 <b>С ДНЕМ РОЖДЕНИЯ, {b_user['first_name']}!</b>\n\nЖелаем вам всего самого лучшего! 🎉",
+                parse_mode='HTML'
+            )
+            users_in_group = get_db_connection().execute(
+                'SELECT user_id FROM users WHERE group_name = ? AND user_id != ?', 
+                (b_user['group_name'], b_user['user_id'])
+            ).fetchall()
+            uname = f"@{b_user['username']}" if b_user['username'] else b_user['first_name']
+            for u in users_in_group:
+                await context.bot.send_message(
+                    u['user_id'],
+                    f"🎉 У {b_user['first_name']} ({uname}) сегодня день рождения!\n\nНе забудьте поздравить! 😊",
+                    parse_mode='HTML'
+                )
+        except Exception:
+            pass
+
+# -------------------- GLOBAL NOTIFICATIONS --------------------
+
+async def ask_global_notification_details(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    if not can_send_global_notifications(user_id):
+        await update.message.reply_text("❌ У вас нет прав для этого действия.")
+        return ConversationHandler.END
+    
+    clear_media_collection(user_id, 'global_notification')
+    await update.message.reply_text(
+        "🌍 <b>Отправка глобального уведомления всем группам</b>\n\n"
+        "Напишите важное уведомление для всех студентов.\n"
+        "Прикрепите медиафайлы, затем текст или нажмите '✅ Готово'.",
+        parse_mode='HTML',
+        reply_markup=ReplyKeyboardMarkup([['❌ Отмена'], ['✅ Готово']], resize_keyboard=True)
+    )
+    return AWAITING_GLOBAL_NOTIFICATION
+
+async def handle_global_notification_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    if not can_send_global_notifications(user_id):
+        return await cancel_conversation(update, context)
+    
+    text = update.message.text if update.message.text else (update.message.caption if update.message.caption else "")
+    if text and text.strip() == '❌ Отмена':
+        return await cancel_conversation(update, context)
+    
+    if text and text.strip() == '✅ Готово':
+        media_collection = get_media_collection(user_id, 'global_notification')
+        notification_text = context.user_data.get('global_notification_text', '')
+        if not notification_text:
+            await update.message.reply_text("❌ Пожалуйста, добавьте текст уведомления.")
+            return AWAITING_GLOBAL_NOTIFICATION
+
+        notif_id = add_global_notification(notification_text, user_id)
+        if notif_id:
+            for m in media_collection:
+                add_global_notification_media(notif_id, m['type'], m['id'], m.get('caption'))
+            await update.message.reply_text("✅ Глобальное уведомление отправляется...", reply_markup=ReplyKeyboardRemove())
+            await send_global_notification_to_all(context.bot, notif_id, notification_text, user_id)
+            clear_media_collection(user_id, 'global_notification')
+            context.user_data.pop('global_notification_text', None)
+        await show_main_menu(update, user_id)
+        return ConversationHandler.END
+
+    if update.message.photo:
+        add_to_media_collection(user_id, 'global_notification', {'type': 'photo', 'id': update.message.photo[-1].file_id, 'caption': update.message.caption})
+        await update.message.reply_text("✅ Фото добавлено. Отправьте еще медиа или '✅ Готово'.")
+        return AWAITING_GLOBAL_NOTIFICATION
+    elif update.message.video:
+        add_to_media_collection(user_id, 'global_notification', {'type': 'video', 'id': update.message.video.file_id, 'caption': update.message.caption})
+        await update.message.reply_text("✅ Видео добавлено. Отправьте еще медиа или '✅ Готово'.")
+        return AWAITING_GLOBAL_NOTIFICATION
+    elif update.message.document:
+        add_to_media_collection(user_id, 'global_notification', {'type': 'document', 'id': update.message.document.file_id, 'caption': update.message.caption})
+        await update.message.reply_text("✅ Документ добавлен. Отправьте еще медиа или '✅ Готово'.")
+        return AWAITING_GLOBAL_NOTIFICATION
+
+    if text and text.strip():
+        context.user_data['global_notification_text'] = text
+        await update.message.reply_text("✅ Текст сохранен. Отправьте медиа или '✅ Готово'.")
+        return AWAITING_GLOBAL_NOTIFICATION
+    return AWAITING_GLOBAL_NOTIFICATION
+
+async def send_global_notification_to_all(bot, global_notification_id, message, added_by):
+    role_display = get_user_role_display(added_by)
+    global_text = f"🌍 <b>ГЛОБАЛЬНОЕ УВЕДОМЛЕНИЕ</b>\n\n{message}\n\n👤 <b>От:</b> {role_display}"
+    conn = get_db_connection()
+    media = conn.execute('SELECT * FROM global_notification_media WHERE global_notification_id = ?', (global_notification_id,)).fetchall()
+    conn.close()
+    
+    users = get_all_users()
+    for user in users:
+        try:
+            settings = get_user_notification_settings(user['user_id'])
+            if settings and settings['important_notifications']:
+                if media:
+                    if len(media) > 1:
+                        media_group = []
+                        for i, m in enumerate(media):
+                            m_dict = dict(m)
+                            cap = global_text if i == 0 else None
+                            if m_dict['media_type'] == 'photo':
+                                media_group.append(InputMediaPhoto(m_dict['media_id'], caption=cap, parse_mode='HTML'))
+                            elif m_dict['media_type'] == 'video':
+                                media_group.append(InputMediaVideo(m_dict['media_id'], caption=cap, parse_mode='HTML'))
+                            elif m_dict['media_type'] == 'document':
+                                media_group.append(InputMediaDocument(m_dict['media_id'], caption=cap, parse_mode='HTML'))
+                        for i in range(0, len(media_group), 10):
+                            await bot.send_media_group(chat_id=user['user_id'], media=media_group[i:i+10])
+                    else:
+                        m_dict = dict(media[0])
+                        if m_dict['media_type'] == 'photo':
+                            await bot.send_photo(user['user_id'], photo=m_dict['media_id'], caption=global_text, parse_mode='HTML')
+                        elif m_dict['media_type'] == 'video':
+                            await bot.send_video(user['user_id'], video=m_dict['media_id'], caption=global_text, parse_mode='HTML')
+                        elif m_dict['media_type'] == 'document':
+                            await bot.send_document(user['user_id'], document=m_dict['media_id'], caption=global_text, parse_mode='HTML')
+                else:
+                    await bot.send_message(user['user_id'], global_text, parse_mode='HTML')
+        except Exception:
+            pass
+
+# -------------------- TEACHER SCHEDULE FUNCTIONS --------------------
+
+async def show_teachers_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        teachers = fetch_teachers_list()
+        if not teachers:
+            await update.message.reply_text("❌ Список преподавателей не загружен. Попробуйте позже.")
+            return ConversationHandler.END
+        
+        keyboard = [[teacher] for teacher in teachers]
+        keyboard.append(['🔙 Назад'])
+        reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+        
+        message_source = update.callback_query.message if update.callback_query else update.message
+        await message_source.reply_text(
+            "👨‍🏫 <b>Выберите преподавателя:</b>",
+            parse_mode='HTML',
+            reply_markup=reply_markup
+        )
+        return AWAITING_TEACHER_SELECTION
+    except Exception as e:
+        print(f"ОШИБКА: {e}")
+        return ConversationHandler.END
+
+async def handle_teacher_selection(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        text = update.message.text
+        user_id = update.effective_user.id
+        
+        if text in ['🔙 Назад', 'Назад']:
+            await show_schedule_menu(update, user_id)
+            return ConversationHandler.END
+        
+        teachers = fetch_teachers_list()
+        if text not in teachers:
+            await update.message.reply_text("❌ Пожалуйста, выберите преподавателя из списка.")
+            return AWAITING_TEACHER_SELECTION
+        
+        context.user_data['selected_teacher'] = text
+        keyboard = [
+            ['📅 Сегодня', '📅 Завтра'],
+            ['📅 Неделя', '📅 Все расписание'],
+            ['🔙 Назад']
+        ]
+        reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+        
+        await update.message.reply_text(
+            f"👨‍🏫 <b>Преподаватель: {text}</b>\n\nВыберите период для просмотра расписания:",
+            parse_mode='HTML',
+            reply_markup=reply_markup
+        )
+        return AWAITING_TEACHER_PERIOD
+    except Exception as e:
+        print(f"ОШИБКА: {e}")
+        return AWAITING_TEACHER_SELECTION
+
+async def handle_teacher_period_selection(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        text = update.message.text
+        teacher_name = context.user_data.get('selected_teacher')
+        user_id = update.effective_user.id
+        
+        if not teacher_name:
+            await update.message.reply_text("❌ Ошибка: преподаватель не выбран.")
+            await show_schedule_menu(update, user_id)
+            return ConversationHandler.END
+        
+        if text in ['🔙 Назад', 'Назад']:
+            return await show_teachers_list(update, context)
+        
+        if text not in ['📅 Сегодня', '📅 Завтра', '📅 Неделя', '📅 Все расписание']:
+            await update.message.reply_text("❌ Пожалуйста, выберите период из списка.")
+            return AWAITING_TEACHER_PERIOD
+        
+        await update.message.reply_text("⏳ Загружаю расписание...", reply_markup=ReplyKeyboardRemove())
+        
+        if text == '📅 Все расписание':
+            filtered_lessons, _ = get_teacher_schedule(text, teacher_name)
+            if not filtered_lessons:
+                await update.message.reply_text(f"❌ Нет расписания для преподавателя {teacher_name}")
+            else:
+                day_messages = split_teacher_schedule_by_days(filtered_lessons, teacher_name)
+                if day_messages:
+                    for msg in day_messages:
+                        await update.message.reply_text(msg, parse_mode='HTML')
+                        await asyncio.sleep(0.5)
+                else:
+                    await update.message.reply_text(f"❌ Не удалось сформировать расписание для преподавателя {teacher_name}")
+        else:
+            _, schedule_text = get_teacher_schedule(text, teacher_name)
+            await update.message.reply_text(schedule_text, parse_mode='HTML')
+        
+        await show_main_menu(update, user_id)
+        return ConversationHandler.END
+    except Exception as e:
+        print(f"ОШИБКА: {e}")
+        await show_main_menu(update, update.effective_user.id)
+        return ConversationHandler.END
+
+# -------------------- OTHER GROUP SCHEDULE FUNCTIONS --------------------
+
+async def show_other_groups_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Shows list of all groups to check schedule for another group"""
+    try:
+        groups = fetch_groups_list()
+        if not groups:
+            await update.message.reply_text("❌ Не удалось загрузить список групп. Попробуйте позже.")
+            return ConversationHandler.END
+        
+        keyboard = [groups[i:i+3] for i in range(0, len(groups), 3)]
+        keyboard.append(['🔙 Назад'])
+        reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+        
+        message_source = update.callback_query.message if update.callback_query else update.message
+        await message_source.reply_text(
+            "👥 <b>Выберите группу:</b>\n\nВыберите группу, расписание которой хотите посмотреть:",
+            parse_mode='HTML',
+            reply_markup=reply_markup
+        )
+        return AWAITING_OTHER_GROUP_SELECTION
+    except Exception as e:
+        print(f"ОШИБКА: Ошибка в show_other_groups_list: {e}")
+        return ConversationHandler.END
+
+async def handle_other_group_selection(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handles selection of another group and asks for period"""
+    try:
+        text = update.message.text
+        user_id = update.effective_user.id
+        
+        if text in ['🔙 Назад', 'Назад']:
+            await show_schedule_menu(update, user_id)
+            return ConversationHandler.END
+        
+        groups = fetch_groups_list()
+        if text not in groups:
+            keyboard = [groups[i:i+3] for i in range(0, len(groups), 3)]
+            keyboard.append(['🔙 Назад'])
+            reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+            await update.message.reply_text(
+                "❌ Пожалуйста, выберите группу из списка:",
+                reply_markup=reply_markup
+            )
+            return AWAITING_OTHER_GROUP_SELECTION
+        
+        context.user_data['selected_other_group'] = text
+        
+        keyboard = [
+            ['📅 Сегодня', '📅 Завтра'],
+            ['📅 Неделя', '📅 Все расписание'],
+            ['🔙 Назад']
+        ]
+        reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+        
+        await update.message.reply_text(
+            f"👥 <b>Группа: {text}</b>\n\nВыберите период для просмотра расписания:",
+            parse_mode='HTML',
+            reply_markup=reply_markup
+        )
+        return AWAITING_OTHER_GROUP_PERIOD
+    except Exception as e:
+        print(f"ОШИБКА: Ошибка в handle_other_group_selection: {e}")
+        return AWAITING_OTHER_GROUP_SELECTION
+
+async def handle_other_group_period_selection(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handles period selection for another group and outputs schedule"""
+    try:
+        text = update.message.text
+        other_group = context.user_data.get('selected_other_group')
+        user_id = update.effective_user.id
+        
+        if not other_group:
+            await update.message.reply_text("❌ Группа не выбрана.")
+            await show_schedule_menu(update, user_id)
+            return ConversationHandler.END
+        
+        if text in ['🔙 Назад', 'Назад']:
+            return await show_other_groups_list(update, context)
+        
+        if text not in ['📅 Сегодня', '📅 Завтра', '📅 Неделя', '📅 Все расписание']:
+            await update.message.reply_text("❌ Пожалуйста, выберите период из списка.")
+            return AWAITING_OTHER_GROUP_PERIOD
+        
+        await update.message.reply_text("⏳ Загружаю расписание...", reply_markup=ReplyKeyboardRemove())
+        
+        if text == '📅 Все расписание':
+            result = get_schedule(text, other_group)
+            if isinstance(result, tuple) and result[0] is None:
+                messages = result[1]
+                if messages:
+                    for msg in messages:
+                        await update.message.reply_text(msg, parse_mode='HTML')
+                        await asyncio.sleep(0.5)
+                else:
+                    await update.message.reply_text(f"❌ Нет расписания для группы {other_group}")
+            else:
+                await update.message.reply_text(result, parse_mode='HTML')
+        else:
+            schedule = get_schedule(text, other_group)
+            await update.message.reply_text(schedule, parse_mode='HTML')
+        
+        await show_main_menu(update, user_id)
+        return ConversationHandler.END
+    except Exception as e:
+        print(f"ОШИБКА: Ошибка в handle_other_group_period_selection: {e}")
+        await show_main_menu(update, update.effective_user.id)
+        return ConversationHandler.END
+
+# -------------------- NAVIGATION AND MENUS --------------------
+
+async def show_schedule_menu(update: Update, user_id: int):
+    """Shows the unified schedule navigation menu"""
+    try:
+        keyboard = [
+            ['👤 Мое расписание'],
+            ['👨‍🏫 Расписание преподавателей'],
+            ['👥 Расписание другой группы'],
+            ['🔙 Назад']
+        ]
+        reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+        message_source = update.callback_query.message if update.callback_query else update.message
+        await message_source.reply_text(
+            "📅 <b>Меню расписания:</b>\n\nВыберите интересующий вас раздел:",
+            parse_mode='HTML',
+            reply_markup=reply_markup
+        )
+    except Exception as e:
+        print(f"ОШИБКА: Ошибка в show_schedule_menu: {e}")
+
+async def show_schedule_periods(update: Update, user_id: int):
+    """Shows the schedule period selection for personal schedule"""
+    try:
+        keyboard = [
+            ['📅 Сегодня', '📅 Завтра'],
+            ['📅 Неделя', '📅 Все расписание'],
+            ['🔙 Назад']
+        ]
+        reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+        await update.message.reply_text("Выбери период для просмотра расписания:", reply_markup=reply_markup)
+    except Exception as e:
+        print(f"ОШИБКА: Ошибка в show_schedule_periods: {e}")
+
+async def show_main_menu(update: Update, user_id: int):
+    """Displays the main menu based on user rights with error handling"""
+    try:
+        user_data = get_user(user_id)
+        if not user_data:
+            await update.message.reply_text("Произошла ошибка, попробуйте /start еще раз.")
+            return
+
+        role = user_data['role']
+        group_name = user_data['group_name']
+        
+        welcome_text = "👋 Добро пожаловать!"
+        if user_id == DEVELOPER_ID:
+            welcome_text = "👑 Добро пожаловать, Разработчик!"
+        elif role == ROLE_STAROSTA:
+            welcome_text = "👑 Добро пожаловать, Староста!"
+        elif role == ROLE_DEPUTY_STAROSTA:
+            welcome_text = "👑 Добро пожаловать, Зам Старосты!"
+        elif user_data['custom_role_name']:
+            welcome_text = f"🔧 Добро пожаловать, {user_data['custom_role_name']}!"
+
+        starosta = get_group_role(group_name, ROLE_STAROSTA) if group_name else None
+        deputy_starosta = get_group_role(group_name, ROLE_DEPUTY_STAROSTA) if group_name else None
+
+        if user_id == DEVELOPER_ID:
+            keyboard = [
+                ['📅 Расписание', '📝 ДЗ'],
+                ['ℹ️ Информация', '💡 Предложения', '💡 Предложить идею'],
+                ['📢 Отправить ДЗ', '📢 Отправить уведомление', '🌍 Отправить всем группам'],
+                ['Удалить ДЗ', 'Удалить уведомление', 'Удалить предложения'],
+                ['Удалить пользователя', 'Список пользователей'],
+                ['💰 Дать денюжку', '🔔 Расписание звонков'],
+                ['🎂 Установить день рождения', '🎓 Сменить группу', '🔧 Настройки уведомлений'],
+                ['👑 Назначить роль', '🔧 Управление правами']
+            ]
+        elif can_manage_users(user_id):
+            keyboard = [
+                ['📅 Расписание', '📝 ДЗ'],
+                ['ℹ️ Информация', '💡 Предложения', '💡 Предложить идею'],
+                ['📢 Отправить ДЗ', '📢 Отправить уведомление', '🌍 Отправить всем группам'],
+                ['Удалить ДЗ', 'Удалить уведомление', 'Удалить предложения'],
+                ['Список пользователей'],
+                ['💰 Дать денюжку', '🔔 Расписание звонков'],
+                ['🎂 Установить день рождения', '🎓 Сменить группу', '🔧 Настройки уведомлений'],
+                ['🔧 Управление правами']
+            ]
+        elif can_send_homework(user_id, group_name) and can_send_notifications(user_id, group_name):
+            keyboard = [
+                ['📅 Расписание', '📝 ДЗ'],
+                ['ℹ️ Информация', '💡 Предложения', '💡 Предложить идею'],
+                ['📢 Отправить ДЗ', '📢 Отправить уведомление'],
+                ['Удалить ДЗ', 'Удалить уведомление', 'Удалить предложения'],
+                ['💰 Дать денюжку', '🔔 Расписание звонков'],
+                ['🎂 Установить день рождения', '🎓 Сменить группу', '🔧 Настройки уведомлений']
+            ]
+        elif can_send_global_notifications(user_id):
+            keyboard = [
+                ['📅 Расписание', '📝 ДЗ'],
+                ['ℹ️ Информация', '💡 Предложить идею'],
+                ['🌍 Отправить всем группам'],
+                ['💰 Дать денюжку', '🔔 Расписание звонков'],
+                ['📞 Связаться с разработчиком'] +
+                (['📞 Связаться со старостой'] if starosta else []) +
+                (['📞 Связаться с замом старосты'] if deputy_starosta else []),
+                ['🎂 Установить день рождения', '🎓 Сменить группу', '🔧 Настройки уведомлений']
+            ]
+        else:
+            keyboard = [
+                ['📅 Расписание', '📝 ДЗ'],
+                ['ℹ️ Информация', '💡 Предложить идею'],
+                ['💰 Дать денюжку', '🔔 Расписание звонков'],
+                ['📞 Связаться с разработчиком'] +
+                (['📞 Связаться со старостой'] if starosta else []) +
+                (['📞 Связаться с замом старосты'] if deputy_starosta else []),
+                ['🎂 Установить день рождения', '🎓 Сменить группу', '🔧 Настройки уведомлений']
+            ]
+        
+        reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+        message_source = update.callback_query.message if update.callback_query else update.message
+        await message_source.reply_text(welcome_text, reply_markup=reply_markup)
+    except Exception as e:
+        print(f"ОШИБКА: {e}")
+
+async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        user = update.effective_user
+        user_id = user.id
+        
+        is_blocked, block_duration = check_spam(user_id)
+        if is_blocked:
+            await warn_user(update, block_duration)
+            return
+        
+        add_user(user_id, user.username, user.first_name, user.last_name)
+        user_data = get_user(user_id)
+        
+        fetch_groups_list()
+        fetch_teachers_list()
+        
+        if not user_data or not user_data['group_name'] or user_data['group_name'] not in ALL_GROUPS:
+            return await ask_user_group(update, context)
+
+        await show_main_menu(update, user_id)
+        return ConversationHandler.END
+    except Exception as e:
+        print(f"ОШИБКА: {e}")
+
+async def ask_user_group(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        groups = fetch_groups_list()
+        if not groups:
+            await update.message.reply_text("❌ Не удалось загрузить список групп. Попробуйте позже.")
+            return ConversationHandler.END
+        
+        keyboard = [groups[i:i+3] for i in range(0, len(groups), 3)]
+        reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=True)
+        
+        message_source = update.callback_query.message if update.callback_query else update.message
+        await message_source.reply_text("👋 Выбери свою группу:\n\n/start если выбор залагал", reply_markup=reply_markup)
+        return AWAITING_GROUP
+    except Exception as e:
+        print(f"ОШИБКА: {e}")
+        return ConversationHandler.END
+
+async def handle_group_selection(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        user_id = update.effective_user.id
+        group_name = update.message.text
+        current_groups = fetch_groups_list()
+        
+        if group_name not in current_groups:
+            await update.message.reply_text(
+                "❌ Пожалуйста, выбери группу из списка:",
+                reply_markup=ReplyKeyboardMarkup([current_groups[i:i+3] for i in range(0, len(current_groups), 3)], 
+                                               resize_keyboard=True, one_time_keyboard=True)
+            )
+            return AWAITING_GROUP
+        
+        update_user_group(user_id, group_name)
+        await update.message.reply_text(f"✅ Группа {group_name} сохранена!", reply_markup=ReplyKeyboardRemove())
+        await show_main_menu(update, user_id)
+        return ConversationHandler.END
+    except Exception as e:
+        print(f"ОШИБКА: {e}")
+        return ConversationHandler.END
+
+async def cancel_conversation(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        user_id = update.effective_user.id
+        if update.message:
+            await update.message.reply_text("Действие отменено.", reply_markup=ReplyKeyboardRemove())
+        elif update.callback_query:
+            await update.callback_query.message.reply_text("Действие отменено.", reply_markup=ReplyKeyboardRemove())
+        await show_main_menu(update, user_id)
+        return ConversationHandler.END
+    except Exception as e:
+        return ConversationHandler.END
+
+async def handle_simple_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        user = update.effective_user
+        user_id = user.id
+        is_blocked, block_duration = check_spam(user_id)
+        if is_blocked:
+            await warn_user(update, block_duration)
+            return
+        
+        text = update.message.text
+        user_data = get_user(user_id)
+        
+        if not user_data or not user_data['group_name']:
+            add_user(user_id, user.username, user.first_name, user.last_name)
+            return await ask_user_group(update, context)
+
+        role = user_data['role']
+        group_name = user_data['group_name']
+        
+        if text in ['📅 Расписание', 'Расписание']:
+            await show_schedule_menu(update, user_id)
+        
+        elif text in ['👤 Мое расписание', 'Мое расписание']:
+            await show_schedule_periods(update, user_id)
+            
+        elif text in ['👨‍🏫 Расписание преподавателей', 'Расписание преподавателей']:
+            return await show_teachers_list(update, context)
+            
+        elif text in ['👥 Расписание другой группы', 'Расписание другой группы']:
+            return await show_other_groups_list(update, context)
+
+        elif text in ['📅 Сегодня', '📅 Завтра', '📅 Неделя', '📅 Все расписание']:
+            await handle_schedule_period(update, context, group_name)
+        
+        elif text == '📝 ДЗ':
+            await show_homework(update, group_name)
+        
+        elif text == 'ℹ️ Информация':
+            await show_information(update, group_name, role)
+
+        elif text == '💡 Предложения' and can_delete_suggestions(user_id):
+            await show_suggestions(update)
+        
+        elif text == 'Список пользователей' and (user_id == DEVELOPER_ID or can_manage_users(user_id)):
+            await show_users_list(update)
+
+        elif text == '💰 Дать денюжку':
+            donate_text = "Если хочешь, можешь поддержать разработчика бота любой суммой😊\n\n+79090154110\nТ‑банк"
+            await update.message.reply_text(donate_text)
+
+        elif text == '🔔 Расписание звонков':
+            await show_call_schedule_menu(update, user_id)
+            
+        elif text in ['Понедельник-Пятница', 'Суббота', 'Сокращенный день']:
+            await handle_call_schedule_choice(update, context)
+        
+        elif text == '🔧 Настройки уведомлений':
+            return await show_notification_settings(update, context)
+        
+        elif text == '📞 Связаться с разработчиком':
+            await contact_developer(update)
+        
+        elif text == '📞 Связаться со старостой':
+            await contact_starosta(update, group_name)
+
+        elif text == '📞 Связаться с замом старосты':
+            await contact_deputy_starosta(update, group_name)
+    
+        elif text in ['🔙 Назад', 'Назад']:
+            await show_main_menu(update, user_id)
+
+        elif text == 'Удалить пользователя' and user_id == DEVELOPER_ID:
+            await delete_user_menu(update, context)
+            
+        elif text == 'Удалить предложения' and can_delete_suggestions(user_id):
+            await delete_suggestions_menu(update, context)
+            
+        elif text == 'Удалить ДЗ' and can_delete_homework(user_id, group_name):
+            await delete_homework_menu(update, context)
+
+        elif text == 'Удалить уведомление' and can_delete_notifications(user_id, group_name):
+            await delete_notification_menu(update, context)
+        
+        elif text == '👑 Назначить роль' and user_id == DEVELOPER_ID:
+            await start_role_assignment(update, context)
+            
+        elif text == '📢 Отправить ДЗ' and can_send_homework(user_id, group_name):
+            await ask_homework_details(update, context)
+        
+        elif text == '📢 Отправить уведомление' and can_send_notifications(user_id, group_name):
+            await ask_notification_details(update, context)
+            
+        elif text == '🌍 Отправить всем группам' and can_send_global_notifications(user_id):
+            await ask_global_notification_details(update, context)
+        
+        elif text == '💡 Предложить идею':
+            if user_id == DEVELOPER_ID:
+                await ask_suggestion_details(update, context)
+        
+        elif text == '🎂 Установить день рождения':
+            await ask_birthday_date(update, context)
+        
+        elif text == '🎓 Сменить группу':
+            return await ask_user_group(update, context)
+            
+        elif text == '🔧 Управление правами' and (user_id == DEVELOPER_ID or can_manage_users(user_id)):
+            await manage_user_rights_menu(update, context)
+
+        else:
+            await forward_message_to_developer(update, context)
+    
+    except Exception as e:
+        print(f"ОШИБКА: Ошибка в handle_simple_message: {e}")
+
+async def forward_message_to_developer(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        if update.effective_chat.type != 'private':
+            return
+        user = update.effective_user
+        user_id = user.id
+        text = update.message.text
+        user_data = get_user(user_id)
+        group_name = user_data['group_name'] if user_data and user_data['group_name'] else "Не установлена"
+        
+        message_to_developer = (
+            f"📩 <b>Новое сообщение от пользователя</b>\n\n"
+            f"👤 <b>Пользователь:</b> {user.first_name}\n"
+            f"🆔 <b>ID:</b> <code>{user_id}</code>\n"
+            f"📱 <b>Username:</b> @{user.username if user.username else 'не установлен'}\n"
+            f"📚 <b>Группа:</b> {group_name}\n"
+            f"💬 <b>Сообщение:</b> {text}"
+        )
+        await context.bot.send_message(DEVELOPER_ID, message_to_developer, parse_mode='HTML')
+    except Exception as e:
+        print(f"ОШИБКА: {e}")
+
+async def handle_schedule_period(update: Update, context: ContextTypes.DEFAULT_TYPE, group_name: str):
+    try:
+        text = update.message.text
+        await update.message.reply_text("⏳ Загружаю расписание...", reply_markup=ReplyKeyboardRemove())
+        
+        if text == '📅 Все расписание':
+            result = get_schedule(text, group_name)
+            if isinstance(result, tuple) and result[0] is None:
+                messages = result[1]
+                if messages:
+                    for msg in messages:
+                        await update.message.reply_text(msg, parse_mode='HTML')
+                        await asyncio.sleep(0.5)
+                else:
+                    await update.message.reply_text(f"❌ Нет расписания для группы {group_name}")
+            else:
+                await update.message.reply_text(result, parse_mode='HTML')
+        else:
+            schedule = get_schedule(text, group_name)
+            await update.message.reply_text(schedule, parse_mode='HTML')
+        
+        await show_main_menu(update, update.effective_user.id)
+    except Exception as e:
+        print(f"ОШИБКА: {e}")
+        await update.message.reply_text("❌ Произошла ошибка при загрузке расписания.")
+        await show_main_menu(update, update.effective_user.id)
+
+# -------------------- HOMEWORK AND NOTIFICATION SENDS --------------------
+
+async def ask_homework_details(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    if not can_send_homework(user_id):
+        await update.message.reply_text("❌ У вас нет прав для отправки ДЗ.")
+        return ConversationHandler.END
+    clear_media_collection(user_id, 'homework')
+    await update.message.reply_text(
+        "📝 <b>Добавление нового ДЗ</b>\n\n"
+        "Напиши в формате:\n<b>Предмет</b>\n<b>Задание</b>\n<b>Срок сдачи</b>\n\n"
+        "Пример:\nМатематика\nРешить задачи 1-10 на странице 45\nДо 15.09\n\n"
+        "Можно прикрепить несколько фото/видео к сообщению. Отправь все медиафайлы, а затем текст с описанием ДЗ.",
+        parse_mode='HTML',
+        reply_markup=ReplyKeyboardMarkup([['❌ Отмена'], ['✅ Готово']], resize_keyboard=True)
+    )
+    return AWAITING_HOMEWORK
+
+async def ask_notification_details(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    if not can_send_notifications(user_id):
+        await update.message.reply_text("❌ У вас нет прав для отправки уведомлений.")
+        return ConversationHandler.END
+    clear_media_collection(user_id, 'notification')
+    await update.message.reply_text(
+        "📢 <b>Отправка уведомления всем</b>\n\n"
+        "Напиши уведомление, которое нужно отправить всем ученикам.\n"
+        "Можно прикрепить несколько фото/видео к сообщению. Отправь все медиафайлы, а затем текст уведомления.",
+        parse_mode='HTML',
+        reply_markup=ReplyKeyboardMarkup([['❌ Отмена'], ['✅ Готово']], resize_keyboard=True)
+    )
+    return AWAITING_INFO
+
+async def ask_suggestion_details(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    clear_media_collection(user_id, 'suggestion')
+    await update.message.reply_text(
+        "💡 <b>Предложение по улучшению бота</b>\n\n"
+        "Напиши свое предложение по улучшению бота:\n\n"
+        "Что бы ты хотел добавить или изменить?\n"
+        "Можно прикрепить фото/видео к сообщению. Отправь все медиафайлы, а затем текст предложения.",
+        parse_mode='HTML',
+        reply_markup=ReplyKeyboardMarkup([['❌ Отмена'], ['✅ Готово']], resize_keyboard=True)
+    )
+    return AWAITING_SUGGESTION
+
+async def handle_homework_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    user_data = get_user(user_id)
+    if not can_send_homework(user_id):
+        return await cancel_conversation(update, context)
+
+    group_name = user_data['group_name']
+    text = update.message.text if update.message.text else (update.message.caption if update.message.caption else "")
+    if text and text.strip() == '❌ Отмена':
+        return await cancel_conversation(update, context)
+    
+    if text and text.strip() == '✅ Готово':
+        media_collection = get_media_collection(user_id, 'homework')
+        hw_text = context.user_data.get('homework_text', '')
+        if not hw_text and not media_collection:
+            await update.message.reply_text("❌ Пожалуйста, добавь описание к ДЗ или медиафайлы.")
+            return AWAITING_HOMEWORK
+        if not hw_text:
+            await update.message.reply_text("❌ Пожалуйста, добавь описание к ДЗ.")
+            return AWAITING_HOMEWORK
+        lines = hw_text.strip().split('\n')
+        if len(lines) >= 3:
+            hw_id = add_homework(lines[0].strip(), lines[1].strip(), lines[2].strip(), group_name, user_id)
+            if hw_id:
+                for m in media_collection:
+                    add_homework_media(hw_id, m['type'], m['id'], m.get('caption'))
+                await update.message.reply_text("✅ ДЗ добавлено и отправляется...", reply_markup=ReplyKeyboardRemove())
+                await send_homework_to_all(context.bot, hw_id, lines[0].strip(), lines[1].strip(), lines[2].strip(), group_name, user_id)
+                clear_media_collection(user_id, 'homework')
+                context.user_data.pop('homework_text', None)
+            await show_main_menu(update, user_id)
+            return ConversationHandler.END
+        else:
+            await update.message.reply_text("❌ Неправильный формат. Нужно 3 строки: предмет, задание, срок")
+            return AWAITING_HOMEWORK
+
+    if update.message.photo:
+        add_to_media_collection(user_id, 'homework', {'type': 'photo', 'id': update.message.photo[-1].file_id, 'caption': update.message.caption})
+        await update.message.reply_text("✅ Фото добавлено. Отправьте еще медиа или нажмите '✅ Готово'.")
+        return AWAITING_HOMEWORK
+    elif update.message.video:
+        add_to_media_collection(user_id, 'homework', {'type': 'video', 'id': update.message.video.file_id, 'caption': update.message.caption})
+        await update.message.reply_text("✅ Видео добавлено. Отправьте еще медиа или нажмите '✅ Готово'.")
+        return AWAITING_HOMEWORK
+    elif update.message.document:
+        add_to_media_collection(user_id, 'homework', {'type': 'document', 'id': update.message.document.file_id, 'caption': update.message.caption})
+        await update.message.reply_text("✅ Документ добавлен. Отправьте еще медиа или нажмите '✅ Готово'.")
+        return AWAITING_HOMEWORK
+
+    if text and text.strip():
+        context.user_data['homework_text'] = text
+        await update.message.reply_text("✅ Текст ДЗ сохранен. Отправьте медиа или нажмите '✅ Готово'.")
+        return AWAITING_HOMEWORK
+    return AWAITING_HOMEWORK
+
+async def handle_notification_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    user_data = get_user(user_id)
+    if not can_send_notifications(user_id):
+        return await cancel_conversation(update, context)
+
+    group_name = user_data['group_name']
+    text = update.message.text if update.message.text else (update.message.caption if update.message.caption else "")
+    if text and text.strip() == '❌ Отмена':
+        return await cancel_conversation(update, context)
+    
+    if text and text.strip() == '✅ Готово':
+        media_collection = get_media_collection(user_id, 'notification')
+        notif_text = context.user_data.get('notification_text', '')
+        if not notif_text:
+            await update.message.reply_text("❌ Пожалуйста, добавь текст уведомления.")
+            return AWAITING_INFO
+        notif_id = add_notification(notif_text, group_name, user_id)
+        if notif_id:
+            for m in media_collection:
+                add_notification_media(notif_id, m['type'], m['id'], m.get('caption'))
+            await update.message.reply_text("✅ Уведомление добавлено и отправляется...", reply_markup=ReplyKeyboardRemove())
+            await send_notification_to_all(context.bot, notif_id, notif_text, group_name, user_id)
+            clear_media_collection(user_id, 'notification')
+            context.user_data.pop('notification_text', None)
+        await show_main_menu(update, user_id)
+        return ConversationHandler.END
+
+    if update.message.photo:
+        add_to_media_collection(user_id, 'notification', {'type': 'photo', 'id': update.message.photo[-1].file_id, 'caption': update.message.caption})
+        await update.message.reply_text("✅ Фото добавлено. Отправьте еще медиа или нажмите '✅ Готово'.")
+        return AWAITING_INFO
+    elif update.message.video:
+        add_to_media_collection(user_id, 'notification', {'type': 'video', 'id': update.message.video.file_id, 'caption': update.message.caption})
+        await update.message.reply_text("✅ Видео добавлено. Отправьте еще медиа или нажмите '✅ Готово'.")
+        return AWAITING_INFO
+    elif update.message.document:
+        add_to_media_collection(user_id, 'notification', {'type': 'document', 'id': update.message.document.file_id, 'caption': update.message.caption})
+        await update.message.reply_text("✅ Документ добавлен. Отправьте еще медиа или нажмите '✅ Готово'.")
+        return AWAITING_INFO
+
+    if text and text.strip():
+        context.user_data['notification_text'] = text
+        await update.message.reply_text("✅ Текст уведомления сохранен. Отправьте медиа или нажмите '✅ Готово'.")
+        return AWAITING_INFO
+    return AWAITING_INFO
+
+async def handle_suggestion_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    user_data = get_user(user_id)
+    text = update.message.text if update.message.text else (update.message.caption if update.message.caption else "")
+    if text and text.strip() == '❌ Отмена':
+        return await cancel_conversation(update, context)
+    
+    if text and text.strip() == '✅ Готово':
+        media_collection = get_media_collection(user_id, 'suggestion')
+        sugg_text = context.user_data.get('suggestion_text', '')
+        if not sugg_text:
+            await update.message.reply_text("❌ Пожалуйста, напиши свое предложение.")
+            return AWAITING_SUGGESTION
+        sugg_id = add_suggestion(user_id, sugg_text)
+        if sugg_id:
+            for m in media_collection:
+                add_suggestion_media(sugg_id, m['type'], m['id'], m.get('caption'))
+            try:
+                if media_collection:
+                    for m in media_collection:
+                        if m['type'] == 'photo':
+                            await context.bot.send_photo(
+                                chat_id=DEVELOPER_ID, photo=m['id'],
+                                caption=f"💡 Новое предложение от {user_data['first_name']} (@{user_data['username']}):\n\n{sugg_text}",
+                                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("💬 Ответить", callback_data=f"respond_{sugg_id}")]])
+                            )
+                        elif m['type'] == 'video':
+                            await context.bot.send_video(
+                                chat_id=DEVELOPER_ID, video=m['id'],
+                                caption=f"💡 Новое предложение от {user_data['first_name']} (@{user_data['username']}):\n\n{sugg_text}",
+                                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("💬 Ответить", callback_data=f"respond_{sugg_id}")]])
+                            )
+                        elif m['type'] == 'document':
+                            await context.bot.send_document(
+                                chat_id=DEVELOPER_ID, document=m['id'],
+                                caption=f"💡 Новое предложение от {user_data['first_name']} (@{user_data['username']}):\n\n{sugg_text}",
+                                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("💬 Ответить", callback_data=f"respond_{sugg_id}")]])
+                            )
+                else:
+                    await context.bot.send_message(
+                        DEVELOPER_ID,
+                        f"💡 Новое предложение от {user_data['first_name']} (@{user_data['username']}):\n\n{sugg_text}",
+                        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("💬 Ответить", callback_data=f"respond_{sugg_id}")]])
+                    )
+            except Exception as e:
+                print(f"Не удалось отправить предложение разработчику: {e}")
+        await update.message.reply_text("✅ Спасибо за предложение! Мы его рассмотрим.", reply_markup=ReplyKeyboardRemove())
+        clear_media_collection(user_id, 'suggestion')
+        context.user_data.pop('suggestion_text', None)
+        await show_main_menu(update, user_id)
+        return ConversationHandler.END
+
+    if update.message.photo:
+        add_to_media_collection(user_id, 'suggestion', {'type': 'photo', 'id': update.message.photo[-1].file_id, 'caption': update.message.caption})
+        await update.message.reply_text("✅ Фото добавлено. Отправьте еще медиа или нажмите '✅ Готово'.")
+        return AWAITING_SUGGESTION
+    elif update.message.video:
+        add_to_media_collection(user_id, 'suggestion', {'type': 'video', 'id': update.message.video.file_id, 'caption': update.message.caption})
+        await update.message.reply_text("✅ Видео добавлено. Отправьте еще медиа или нажмите '✅ Готово'.")
+        return AWAITING_SUGGESTION
+    elif update.message.document:
+        add_to_media_collection(user_id, 'suggestion', {'type': 'document', 'id': update.message.document.file_id, 'caption': update.message.caption})
+        await update.message.reply_text("✅ Документ добавлен. Отправьте еще медиа или нажмите '✅ Готово'.")
+        return AWAITING_SUGGESTION
+
+    if text and text.strip():
+        context.user_data['suggestion_text'] = text
+        await update.message.reply_text("✅ Текст предложения сохранен. Отправьте медиа или нажмите '✅ Готово'.")
+        return AWAITING_SUGGESTION
+    return AWAITING_SUGGESTION
+
+async def send_homework_to_all(bot, homework_id, subject, task, deadline, group_name, added_by):
+    role_display = get_user_role_display(added_by)
+    hw_text = (
+        f"📝 <b>НОВОЕ ДОМАШНЕЕ ЗАДАНИЕ</b>\n\n"
+        f"📚 <b>Предмет:</b> {subject}\n"
+        f"📋 <b>Задание:</b> {task}\n"
+        f"⏰ <b>Срок сдачи:</b> {deadline}\n"
+        f"👥 <b>Группа:</b> {group_name}\n"
+        f"👤 <b>От:</b> {role_display}"
+    )
+    conn = get_db_connection()
+    media = conn.execute('SELECT * FROM homework_media WHERE homework_id = ?', (homework_id,)).fetchall()
+    conn.close()
+    users = get_db_connection().execute('SELECT user_id FROM users WHERE group_name = ?', (group_name,)).fetchall()
+    for user in users:
+        try:
+            settings = get_user_notification_settings(user['user_id'])
+            if settings and settings['new_homework']:
+                if media:
+                    if len(media) > 1:
+                        media_group = []
+                        for i, m in enumerate(media):
+                            m_dict = dict(m)
+                            cap = hw_text if i == 0 else None
+                            if m_dict['media_type'] == 'photo':
+                                media_group.append(InputMediaPhoto(m_dict['media_id'], caption=cap, parse_mode='HTML'))
+                            elif m_dict['media_type'] == 'video':
+                                media_group.append(InputMediaVideo(m_dict['media_id'], caption=cap, parse_mode='HTML'))
+                            elif m_dict['media_type'] == 'document':
+                                media_group.append(InputMediaDocument(m_dict['media_id'], caption=cap, parse_mode='HTML'))
+                        for i in range(0, len(media_group), 10):
+                            await bot.send_media_group(chat_id=user['user_id'], media=media_group[i:i+10])
+                    else:
+                        m_dict = dict(media[0])
+                        if m_dict['media_type'] == 'photo':
+                            await bot.send_photo(chat_id=user['user_id'], photo=m_dict['media_id'], caption=hw_text, parse_mode='HTML')
+                        elif m_dict['media_type'] == 'video':
+                            await bot.send_video(chat_id=user['user_id'], video=m_dict['media_id'], caption=hw_text, parse_mode='HTML')
+                        elif m_dict['media_type'] == 'document':
+                            await bot.send_document(chat_id=user['user_id'], document=m_dict['media_id'], caption=hw_text, parse_mode='HTML')
+                else:
+                    await bot.send_message(user['user_id'], hw_text, parse_mode='HTML')
+        except Exception as e:
+            print(f"ОШИБКА: {e}")
+
+async def send_notification_to_all(bot, notification_id, message, group_name, added_by):
+    role_display = get_user_role_display(added_by)
+    notif_text = f"📢 <b>ВАЖНОЕ УВЕДОМЛЕНИЕ</b>\n\n{message}\n\n👥 <b>Группа:</b> {group_name}\n👤 <b>От:</b> {role_display}"
+    conn = get_db_connection()
+    media = conn.execute('SELECT * FROM notification_media WHERE notification_id = ?', (notification_id,)).fetchall()
+    conn.close()
+    users = get_db_connection().execute('SELECT user_id FROM users WHERE group_name = ?', (group_name,)).fetchall()
+    for user in users:
+        try:
+            settings = get_user_notification_settings(user['user_id'])
+            if settings and settings['important_notifications']:
+                if media:
+                    if len(media) > 1:
+                        media_group = []
+                        for i, m in enumerate(media):
+                            m_dict = dict(m)
+                            cap = notif_text if i == 0 else None
+                            if m_dict['media_type'] == 'photo':
+                                media_group.append(InputMediaPhoto(m_dict['media_id'], caption=cap, parse_mode='HTML'))
+                            elif m_dict['media_type'] == 'video':
+                                media_group.append(InputMediaVideo(m_dict['media_id'], caption=cap, parse_mode='HTML'))
+                            elif m_dict['media_type'] == 'document':
+                                media_group.append(InputMediaDocument(m_dict['media_id'], caption=cap, parse_mode='HTML'))
+                        for i in range(0, len(media_group), 10):
+                            await bot.send_media_group(chat_id=user['user_id'], media=media_group[i:i+10])
+                    else:
+                        m_dict = dict(media[0])
+                        if m_dict['media_type'] == 'photo':
+                            await bot.send_photo(chat_id=user['user_id'], photo=m_dict['media_id'], caption=notif_text, parse_mode='HTML')
+                        elif m_dict['media_type'] == 'video':
+                            await bot.send_video(chat_id=user['user_id'], video=m_dict['media_id'], caption=notif_text, parse_mode='HTML')
+                        elif m_dict['media_type'] == 'document':
+                            await bot.send_document(chat_id=user['user_id'], document=m_dict['media_id'], caption=notif_text, parse_mode='HTML')
+                else:
+                    await bot.send_message(user['user_id'], notif_text, parse_mode='HTML')
+        except Exception as e:
+            print(f"ОШИБКА: {e}")
+
+# -------------------- INFO AND USER MANAGEMENT --------------------
+
+async def show_homework(update: Update, group_name: str):
+    try:
+        homeworks = get_homeworks(group_name)
+        if not homeworks:
+            await update.message.reply_text("📭 Пока нет домашних заданий")
+            return
+        for hw in homeworks:
+            hw_text = (
+                f"📝 <b>Домашнее задание</b>\n"
+                f"📚 <b>Предмет:</b> {hw['subject']}\n"
+                f"📋 <b>Задание:</b> {hw['task']}\n"
+                f"⏰ <b>Срок:</b> {hw['deadline']}\n"
+                f"👤 <b>Добавил:</b> {hw['first_name']}\n"
+                f"📅 <b>Дата:</b> {datetime.fromisoformat(hw['created_at']).strftime('%d.%m.%Y %H:%M')}"
+            )
+            if hw['media']:
+                if len(hw['media']) > 1:
+                    media_group = []
+                    for i, m in enumerate(hw['media']):
+                        cap = hw_text if i == 0 else None
+                        if m['media_type'] == 'photo':
+                            media_group.append(InputMediaPhoto(m['media_id'], caption=cap, parse_mode='HTML'))
+                        elif m['media_type'] == 'video':
+                            media_group.append(InputMediaVideo(m['media_id'], caption=cap, parse_mode='HTML'))
+                        elif m['media_type'] == 'document':
+                            media_group.append(InputMediaDocument(m['media_id'], caption=cap, parse_mode='HTML'))
+                    for i in range(0, len(media_group), 10):
+                        await update.message.reply_media_group(media=media_group[i:i+10])
+                else:
+                    m = hw['media'][0]
+                    if m['media_type'] == 'photo':
+                        await update.message.reply_photo(photo=m['media_id'], caption=hw_text, parse_mode='HTML')
+                    elif m['media_type'] == 'video':
+                        await update.message.reply_video(video=m['media_id'], caption=hw_text, parse_mode='HTML')
+                    elif m['media_type'] == 'document':
+                        await update.message.reply_document(document=m['media_id'], caption=hw_text, parse_mode='HTML')
+            else:
+                await update.message.reply_text(hw_text, parse_mode='HTML')
+        await update.message.reply_text(f"📊 <b>Показано:</b> {len(homeworks)} заданий", parse_mode='HTML')
+    except Exception as e:
+        print(f"ОШИБКА: {e}")
+
+async def show_information(update: Update, group_name: str, role: str):
+    try:
+        user_count = get_total_user_count()
+        starosta = get_group_role(group_name, ROLE_STAROSTA)
+        deputy = get_group_role(group_name, ROLE_DEPUTY_STAROSTA)
+        info_text = f"📊 <b>Пользователей в боте:</b> {user_count}\n\n👥 <b>Контакты группы {group_name}:</b>\n"
+        if starosta:
+            uname = f"@{starosta['username']}" if starosta['username'] else starosta['first_name']
+            info_text += f"👑 <b>Староста:</b> {uname}\n"
+        if deputy:
+            uname = f"@{deputy['username']}" if deputy['username'] else deputy['first_name']
+            info_text += f"👑 <b>Зам старосты:</b> {uname}\n"
+        info_text += "👨‍💻 <b>Разработчик:</b> @imya_polbzovatela\n\n"
+        await update.message.reply_text(info_text, parse_mode='HTML')
+
+        notifications = get_notifications(group_name)
+        if not notifications:
+            await update.message.reply_text("📭 Пока нет уведомлений")
+            return
+        
+        await update.message.reply_text("📢 <b>Важные уведомления:</b>", parse_mode='HTML')
+        for notif in notifications[:2]:
+            notif_text = f"{notif['message']}\n\n👤 <b>От:</b> {notif['first_name']} | 📅 {datetime.fromisoformat(notif['created_at']).strftime('%d.%m.%Y')}"
+            if notif['media']:
+                if len(notif['media']) > 1:
+                    media_group = []
+                    for i, m in enumerate(notif['media']):
+                        cap = notif_text if i == 0 else None
+                        if m['media_type'] == 'photo':
+                            media_group.append(InputMediaPhoto(m['media_id'], caption=cap))
+                        elif m['media_type'] == 'video':
+                            media_group.append(InputMediaVideo(m['media_id'], caption=cap))
+                        elif m['media_type'] == 'document':
+                            media_group.append(InputMediaDocument(m['media_id'], caption=cap))
+                    for i in range(0, len(media_group), 10):
+                        await update.message.reply_media_group(media=media_group[i:i+10])
+                else:
+                    m = notif['media'][0]
+                    if m['media_type'] == 'photo':
+                        await update.message.reply_photo(photo=m['media_id'], caption=notif_text)
+                    elif m['media_type'] == 'video':
+                        await update.message.reply_video(video=m['media_id'], caption=notif_text)
+                    elif m['media_type'] == 'document':
+                        await update.message.reply_document(document=m['media_id'], caption=notif_text)
+            else:
+                await update.message.reply_text(notif_text)
+    except Exception as e:
+        print(f"ОШИБКА: {e}")
+
+async def show_suggestions(update: Update):
+    if update.effective_user.id != DEVELOPER_ID: return
+    suggestions = get_suggestions()
+    if not suggestions:
+        await update.message.reply_text("📭 Пока нет предложений от учеников")
+        return
+    for s in suggestions[:5]:
+        uname = f"@{s['username']}" if s['username'] else s['first_name']
+        s_text = f"💡 <b>От {uname}:</b>\n\n{s['message']}\n\n📅 {datetime.fromisoformat(s['created_at']).strftime('%d.%m.%Y %H:%M')}"
+        if s['responses']:
+            s_text += "\n\n<b>Ответы:</b>\n"
+            for r in s['responses']:
+                r_name = f"@{r['username']}" if r['username'] else r['first_name']
+                s_text += f"👤 {r_name}: {r['message']}\n"
+        if s['media']:
+            if len(s['media']) > 1:
+                media_group = []
+                for i, m in enumerate(s['media']):
+                    cap = s_text if i == 0 else None
+                    if m['media_type'] == 'photo':
+                        media_group.append(InputMediaPhoto(m['media_id'], caption=cap, parse_mode='HTML'))
+                    elif m['media_type'] == 'video':
+                        media_group.append(InputMediaVideo(m['media_id'], caption=cap, parse_mode='HTML'))
+                    elif m['media_type'] == 'document':
+                        media_group.append(InputMediaDocument(m['media_id'], caption=cap, parse_mode='HTML'))
+                for i in range(0, len(media_group), 10):
+                    await update.message.reply_media_group(media=media_group[i:i+10])
+            else:
+                m = s['media'][0]
+                if m['media_type'] == 'photo':
+                    await update.message.reply_photo(photo=m['media_id'], caption=s_text, parse_mode='HTML')
+                elif m['media_type'] == 'video':
+                    await update.message.reply_video(video=m['media_id'], caption=s_text, parse_mode='HTML')
+                elif m['media_type'] == 'document':
+                    await update.message.reply_document(document=m['media_id'], caption=s_text, parse_mode='HTML')
+        else:
+            await update.message.reply_text(s_text, parse_mode='HTML')
+        if not s['responses']:
+            await update.message.reply_text("💬 Ответить на предложение:", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("💬 Ответить", callback_data=f"respond_{s['id']}")]]) )
+
+async def show_users_list(update: Update):
+    users = get_all_users()
+    if not users:
+        await update.message.reply_text("❌ В базе данных нет пользователей.")
+        return
+    groups_dict = {}
+    for user in users:
+        group_name = user['group_name'] if user['group_name'] else "Без группы"
+        if group_name not in groups_dict:
+            groups_dict[group_name] = []
+        groups_dict[group_name].append(user)
+    
+    user_list_text = "👥 <b>Список всех пользователей по группам</b>\n\n"
+    for group_name, group_users in sorted(groups_dict.items()):
+        user_list_text += f"<b>📚 Группа: {group_name}</b> ({len(group_users)} чел.)\n"
+        for user in group_users:
+            username = user['username'] if user['username'] else "Нет юзернейма"
+            role_display = get_user_role_display(user['user_id'])
+            user_list_text += (
+                f"  👤 <b>Имя:</b> {user['first_name']}\n"
+                f"  🆔 <b>ID:</b> <code>{user['user_id']}</code>\n"
+                f"  👨‍💼 <b>Роль:</b> {role_display}\n"
+                f"  📱 <b>Юзер:</b> @{username}\n\n"
+            )
+        user_list_text += "\n"
+    
+    if len(user_list_text) > 4000:
+        parts, current_part = [], ""
+        for section in user_list_text.split('\n\n'):
+            if len(current_part + section + '\n\n') > 4000:
+                parts.append(current_part)
+                current_part = section + '\n\n'
+            else:
+                current_part += section + '\n\n'
+        if current_part: parts.append(current_part)
+        for i, part in enumerate(parts):
+            await update.message.reply_text(f"{part}\n<b>Часть {i+1}/{len(parts)}</b>", parse_mode='HTML')
+    else:
+        await update.message.reply_text(user_list_text, parse_mode='HTML')
+
+async def handle_show_users_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        query = update.callback_query
+        await query.answer()
+        group_name = query.data.replace('show_users_', '')
+        users = [user for user in get_all_users() if user['group_name'] == group_name]
+        if not users:
+            await query.edit_message_text(f"❌ В группе {group_name} нет пользователей.")
+            return
+        user_list_text = f"👥 <b>Пользователи группы {group_name}</b>\n\n"
+        for user in users:
+            username = user['username'] if user['username'] else "Нет юзернейма"
+            role_display = get_user_role_display(user['user_id'])
+            user_list_text += (
+                f"👤 <b>Имя:</b> {user['first_name']}\n"
+                f"🆔 <b>ID:</b> <code>{user['user_id']}</code>\n"
+                f"👨‍💼 <b>Роль:</b> {role_display}\n"
+                f"📱 <b>Юзер:</b> @{username}\n\n"
+            )
+        keyboard = [[InlineKeyboardButton("🔙 Назад к группам", callback_data="back_to_groups")]]
+        await query.edit_message_text(user_list_text, parse_mode='HTML', reply_markup=InlineKeyboardMarkup(keyboard))
+    except Exception as e:
+        print(f"ОШИБКА: {e}")
+
+async def handle_back_to_groups(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        query = update.callback_query
+        await query.answer()
+        await show_users_list(update)
+    except Exception as e:
+        print(f"ОШИБКА: {e}")
+
+async def delete_homework_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    user_data = get_user(user_id)
+    if not can_delete_homework(user_id, user_data['group_name']): return ConversationHandler.END
+    homeworks = get_homeworks(user_data['group_name'])
+    if not homeworks:
+        await update.message.reply_text("📝 Нет домашних заданий для удаления.")
+        return ConversationHandler.END
+    keyboard = [[InlineKeyboardButton(f"❌ {hw['subject']} | {hw['deadline']}", callback_data=f"del_hw_{hw['id']}")] for hw in homeworks]
+    await update.message.reply_text("Выберите ДЗ для удаления:", reply_markup=InlineKeyboardMarkup(keyboard))
+    return AWAITING_HOMEWORK_DELETE
+
+async def delete_notification_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    user_data = get_user(user_id)
+    if not can_delete_notifications(user_id, user_data['group_name']): return ConversationHandler.END
+    notifications = get_notifications(user_data['group_name'])
+    if not notifications:
+        await update.message.reply_text("📢 Нет уведомлений для удаления.")
+        return ConversationHandler.END
+    keyboard = [[InlineKeyboardButton(f"📢 {n['message'][:20]}...", callback_data=f"del_notif_{n['id']}")] for n in notifications]
+    await update.message.reply_text("Выберите уведомление для удаления:", reply_markup=InlineKeyboardMarkup(keyboard))
+    return AWAITING_INFO_DELETE
+
+async def delete_user_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != DEVELOPER_ID: return ConversationHandler.END
+    users = [u for u in get_all_users() if u['user_id'] != DEVELOPER_ID]
+    if not users:
+        await update.message.reply_text("👥 Нет пользователей для удаления.")
+        return ConversationHandler.END
+    keyboard = [[InlineKeyboardButton(f"❌ {u['first_name']} (@{u['username']}) - Группа: {u['group_name']} - ID: {u['user_id']}", callback_data=f"del_user_{u['user_id']}")] for u in users]
+    await update.message.reply_text("Выберите пользователя для удаления:", reply_markup=InlineKeyboardMarkup(keyboard))
+    return AWAITING_USER_DELETE
+
+async def delete_suggestions_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not can_delete_suggestions(update.effective_user.id): return ConversationHandler.END
+    suggestions = get_suggestions()
+    if not suggestions:
+        await update.message.reply_text("💡 Нет предложений для удаления.")
+        return ConversationHandler.END
+    keyboard = [[InlineKeyboardButton(f"❌ {s['message'][:20]}...", callback_data=f"del_sugg_{s['id']}")] for s in suggestions]
+    await update.message.reply_text("Выберите предложение для удаления:", reply_markup=InlineKeyboardMarkup(keyboard))
+    return AWAITING_SUGGESTION_DELETE
+
+async def handle_delete_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        query = update.callback_query
+        await query.answer()
+        parts = query.data.split('_')
+        dtype, item_id = parts[1], int(parts[2])
+        if dtype == 'hw': delete_homework(item_id)
+        elif dtype == 'notif': delete_notification(item_id)
+        elif dtype == 'user': delete_user(item_id)
+        elif dtype == 'sugg': delete_suggestion(item_id)
+        await query.edit_message_text("✅ Удалено.")
+        await show_main_menu(update, query.from_user.id)
+        return ConversationHandler.END
+    except Exception as e:
+        print(f"ОШИБКА: {e}")
+        return ConversationHandler.END
+
+async def handle_suggestion_response_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        query = update.callback_query
+        await query.answer()
+        if query.from_user.id != DEVELOPER_ID: return
+        context.user_data['responding_to_suggestion'] = int(query.data.split('_')[1])
+        await query.edit_message_reply_markup(reply_markup=None)
+        await query.message.reply_text("💬 <b>Ответ на предложение</b>\n\nНапиши свой ответ:", parse_mode='HTML', reply_markup=ReplyKeyboardMarkup([['❌ Отмена']], resize_keyboard=True))
+        return AWAITING_SUGGESTION_RESPONSE
+    except Exception as e:
+        print(f"ОШИБКА: {e}")
+        return ConversationHandler.END
+
+async def handle_suggestion_response_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        user_id = update.effective_user.id
+        user_data = get_user(user_id)
+        text = update.message.text
+        if text == '❌ Отмена': return await cancel_conversation(update, context)
+        sugg_id = context.user_data.get('responding_to_suggestion')
+        conn = get_db_connection()
+        suggestion = conn.execute('SELECT * FROM suggestions WHERE id = ?', (sugg_id,)).fetchone()
+        conn.close()
+        if suggestion:
+            add_suggestion_response(sugg_id, user_id, text)
+            try:
+                responder_name = f"@{user_data['username']}" if user_data['username'] else user_data['first_name']
+                await context.bot.send_message(
+                    suggestion['user_id'],
+                    f"💬 <b>Ответ на ваше предложение</b>\n\n👤 <b>От:</b> {responder_name}\n💡 <b>Ваше предложение:</b> {suggestion['message'][:100]}...\n\n📝 <b>Ответ:</b> {text}",
+                    parse_mode='HTML'
+                )
+            except Exception:
+                pass
+        await update.message.reply_text("✅ Ответ отправлен!", reply_markup=ReplyKeyboardRemove())
+        await show_main_menu(update, user_id)
+        return ConversationHandler.END
+    except Exception as e:
+        print(f"ОШИБКА: {e}")
+        return AWAITING_SUGGESTION_RESPONSE
+
+# -------------------- ROLE ASSIGNMENT SYSTEM --------------------
+
+async def start_role_assignment(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != DEVELOPER_ID: return ConversationHandler.END
+    users = get_all_users()
+    groups_dict = {}
+    for user in users:
+        if user['user_id'] == DEVELOPER_ID: continue
+        gname = user['group_name'] or "Без группы"
+        groups_dict.setdefault(gname, []).append(user)
+    keyboard = [[InlineKeyboardButton(f"📚 {g} ({len(groups_dict[g])} чел.)", callback_data=f"role_group_{g}")] for g in sorted(groups_dict.keys())]
+    keyboard.append([InlineKeyboardButton("✏️ Назначить собственную роль", callback_data="custom_role_global")])
+    keyboard.append([InlineKeyboardButton("❌ Отмена", callback_data="role_cancel")])
+    await update.message.reply_text("👑 <b>Назначение ролей пользователям</b>\n\nВыберите группу для назначения роли:", parse_mode='HTML', reply_markup=InlineKeyboardMarkup(keyboard))
+    return AWAITING_ROLE_ASSIGNMENT
+
+async def handle_role_group_selection(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    if query.data == "role_cancel": return await cancel_conversation(update, context)
+    if query.data == "custom_role_global":
+        context.user_data['custom_role_global'] = True
+        await query.edit_message_text("✏️ <b>Назначение собственной роли</b>\n\nВведите ID пользователя для назначения собственной роли:", parse_mode='HTML', reply_markup=ReplyKeyboardMarkup([['❌ Отмена']], resize_keyboard=True))
+        return AWAITING_CUSTOM_ROLE
+    group_name = query.data.replace('role_group_', '')
+    context.user_data['role_assignment_group'] = group_name
+    users = [u for u in get_all_users() if u['group_name'] == group_name and u['user_id'] != query.from_user.id]
+    keyboard = [[InlineKeyboardButton(f"{u['first_name']} (@{u['username']}) - {get_user_role_display(u['user_id'])}", callback_data=f"role_user_{u['user_id']}")] for u in users]
+    keyboard.append([InlineKeyboardButton("🔙 Назад к группам", callback_data="role_back_to_groups")])
+    keyboard.append([InlineKeyboardButton("❌ Отмена", callback_data="role_cancel")])
+    await query.edit_message_text(f"👑 <b>Назначение роли для группы {group_name}</b>\n\nВыберите пользователя:", parse_mode='HTML', reply_markup=InlineKeyboardMarkup(keyboard))
+    return AWAITING_ROLE_ASSIGNMENT
+
+async def handle_role_user_selection(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    if query.data == "role_cancel": return await cancel_conversation(update, context)
+    if query.data == "role_back_to_groups": return await start_role_assignment(update, context)
+    user_id = int(query.data.replace('role_user_', ''))
+    context.user_data['role_assignment_user'] = user_id
+    user_data = get_user(user_id)
+    keyboard = [
+        [InlineKeyboardButton("👑 Староста", callback_data="role_type_starosta")],
+        [InlineKeyboardButton("👑 Зам старосты", callback_data="role_type_deputy_starosta")],
+        [InlineKeyboardButton("✏️ Собственная роль", callback_data="custom_role")],
+        [InlineKeyboardButton("🔙 Назад к пользователям", callback_data=f"role_back_to_users_{context.user_data['role_assignment_group']}")],
+        [InlineKeyboardButton("❌ Снять все роли", callback_data="role_remove_all")],
+        [InlineKeyboardButton("❌ Отмена", callback_data="role_cancel")]
+    ]
+    await query.edit_message_text(f"👑 <b>Назначение роли: {user_data['first_name']}</b> (@{user_data['username']})\n\nВыберите тип роли:", parse_mode='HTML', reply_markup=InlineKeyboardMarkup(keyboard))
+    return AWAITING_ROLE_ASSIGNMENT
+
+async def handle_role_type_selection(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    if query.data == "role_cancel": return await cancel_conversation(update, context)
+    if query.data.startswith("role_back_to_users_"):
+        group_name = query.data.replace('role_back_to_users_', '')
+        context.user_data['role_assignment_group'] = group_name
+        return await handle_role_group_selection(update, context)
+    if query.data == "custom_role":
+        await query.edit_message_text("✏️ <b>Назначение собственной роли</b>\n\nВведите название роли для пользователя:", parse_mode='HTML', reply_markup=ReplyKeyboardMarkup([['❌ Отмена']], resize_keyboard=True))
+        return AWAITING_CUSTOM_ROLE
+
+    user_id = context.user_data['role_assignment_user']
+    group_name = context.user_data['role_assignment_group']
+    
+    if query.data == "role_remove_all":
+        remove_group_role(group_name, ROLE_STAROSTA)
+        remove_group_role(group_name, ROLE_DEPUTY_STAROSTA)
+        await query.edit_message_text("✅ Все роли сняты!")
+    else:
+        role_type = query.data.replace('role_type_', '')
+        user_data = get_user(user_id)
+        set_group_role(group_name, role_type, user_id, user_data['username'], user_data['first_name'])
+        await query.edit_message_text("✅ Роль успешно назначена!")
+    await show_main_menu(update, query.from_user.id)
+    return ConversationHandler.END
+
+async def handle_custom_role_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        user_id = update.effective_user.id
+        if user_id != DEVELOPER_ID: return await cancel_conversation(update, context)
+        custom_role_name = update.message.text.strip()
+        if custom_role_name == '❌ Отмена': return await start_role_assignment(update, context)
+        
+        if context.user_data.get('custom_role_global'):
+            try:
+                target_user_id = int(custom_role_name)
+                context.user_data['custom_role_user_id'] = target_user_id
+                context.user_data.pop('custom_role_global', None)
+                await update.message.reply_text("✏️ <b>Назначение собственной роли</b>\n\nВведите название роли для пользователя:", parse_mode='HTML', reply_markup=ReplyKeyboardMarkup([['❌ Отмена']], resize_keyboard=True))
+                return AWAITING_CUSTOM_ROLE
+            except ValueError:
+                await update.message.reply_text("❌ Неверный формат ID пользователя. Введите числовой ID:", reply_markup=ReplyKeyboardMarkup([['❌ Отмена']], resize_keyboard=True))
+                return AWAITING_CUSTOM_ROLE
+        else:
+            target_user_id = context.user_data.get('custom_role_user_id', context.user_data.get('role_assignment_user'))
+            target_user = get_user(target_user_id)
+            if not target_user:
+                await update.message.reply_text("❌ Пользователь не найден.")
+                return ConversationHandler.END
+            
+            rights_data = dict(target_user)
+            rights_data['role'] = ROLE_CUSTOM
+            rights_data['custom_role_name'] = custom_role_name
+            update_user_rights(target_user_id, rights_data)
+            await update.message.reply_text(f"✅ Пользователю {target_user['first_name']} установлена роль: {custom_role_name}!", reply_markup=ReplyKeyboardRemove())
+            await show_main_menu(update, user_id)
+            return ConversationHandler.END
+    except Exception as e:
+        print(f"ОШИБКА: {e}")
+        return AWAITING_CUSTOM_ROLE
+
+# -------------------- USER RIGHTS MANAGEMENT --------------------
+
+async def manage_user_rights_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != DEVELOPER_ID and not can_manage_users(update.effective_user.id): return ConversationHandler.END
+    users = get_all_users()
+    groups_dict = {}
+    for user in users:
+        if user['user_id'] == update.effective_user.id: continue
+        gname = user['group_name'] or "Без группы"
+        groups_dict.setdefault(gname, []).append(user)
+    keyboard = [[InlineKeyboardButton(f"📚 {g} ({len(groups_dict[g])} чел.)", callback_data=f"rights_group_{g}")] for g in sorted(groups_dict.keys())]
+    await update.message.reply_text("👥 <b>Управление правами пользователей</b>\n\nВыберите группу:", parse_mode='HTML', reply_markup=InlineKeyboardMarkup(keyboard))
+    return AWAITING_USER_RIGHTS
+
+async def handle_user_rights_group_selection(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    if query.data == "rights_back_to_groups": return await manage_user_rights_menu(update, context)
+    group_name = query.data.replace('rights_group_', '')
+    context.user_data['rights_management_group'] = group_name
+    users = [u for u in get_all_users() if u['group_name'] == group_name and u['user_id'] != query.from_user.id]
+    keyboard = [[InlineKeyboardButton(f"{u['first_name']} (@{u['username']}) - {get_user_role_display(u['user_id'])}", callback_data=f"manage_rights_{u['user_id']}")] for u in users]
+    keyboard.append([InlineKeyboardButton("🔙 Назад к группам", callback_data="rights_back_to_groups")])
+    await query.edit_message_text(f"👥 <b>Управление правами группы {group_name}</b>\n\nВыберите пользователя:", parse_mode='HTML', reply_markup=InlineKeyboardMarkup(keyboard))
+    return AWAITING_USER_RIGHTS
+
+async def handle_user_rights_selection(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    if query.data == "rights_back_to_groups": return await manage_user_rights_menu(update, context)
+    target_user_id = int(query.data.split('_')[2])
+    target_user = get_user(target_user_id)
+    keyboard = [
+        [InlineKeyboardButton(f"{'✅' if target_user['can_send_homework'] else '❌'} Отправка ДЗ", callback_data=f"toggle_homework_{target_user_id}")],
+        [InlineKeyboardButton(f"{'✅' if target_user['can_send_notifications'] else '❌'} Отправка уведомлений", callback_data=f"toggle_notifications_{target_user_id}")],
+        [InlineKeyboardButton(f"{'✅' if target_user['can_send_global_notifications'] else '❌'} Глобальные уведомления", callback_data=f"toggle_global_{target_user_id}")],
+        [InlineKeyboardButton(f"{'✅' if target_user['can_delete_homework'] else '❌'} Удаление ДЗ", callback_data=f"toggle_del_homework_{target_user_id}")],
+        [InlineKeyboardButton(f"{'✅' if target_user['can_delete_notifications'] else '❌'} Удаление уведомлений", callback_data=f"toggle_del_notifications_{target_user_id}")],
+        [InlineKeyboardButton(f"{'✅' if target_user['can_delete_suggestions'] else '❌'} Удаление предложений", callback_data=f"toggle_del_suggestions_{target_user_id}")],
+        [InlineKeyboardButton(f"{'✅' if target_user['can_manage_users'] else '❌'} Управление пользователями", callback_data=f"toggle_manage_users_{target_user_id}")],
+        [InlineKeyboardButton("🔙 Назад к списку", callback_data=f"rights_back_to_users_{context.user_data['rights_management_group']}")],
+        [InlineKeyboardButton("❌ Сбросить все права", callback_data=f"reset_rights_{target_user_id}")],
+        [InlineKeyboardButton("✅ Сохранить и выйти", callback_data="save_rights")]
+    ]
+    role_display = get_user_role_display(target_user_id)
+    await query.edit_message_text(f"👤 <b>Управление правами: {target_user['first_name']}</b>\nГруппа: {target_user['group_name']} | Роль: {role_display}\n\nНажмите на право для изменения:", parse_mode='HTML', reply_markup=InlineKeyboardMarkup(keyboard))
+    return AWAITING_USER_RIGHTS
+
+async def handle_rights_toggle(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    if query.data == "save_rights":
+        await query.edit_message_text("✅ Права сохранены!")
+        await show_main_menu(update, query.from_user.id)
+        return ConversationHandler.END
+    if query.data.startswith("rights_back_to_users_"):
+        group_name = query.data.replace('rights_back_to_users_', '')
+        context.user_data['rights_management_group'] = group_name
+        return await handle_user_rights_group_selection(update, context)
+
+    parts = query.data.split('_')
+    if len(parts) == 3:
+        action = parts[1]
+        target_user_id = int(parts[2])
+    elif len(parts) == 4:
+        action = f"{parts[1]}_{parts[2]}"
+        target_user_id = int(parts[3])
+    else:
+        return
+
+    target_user = get_user(target_user_id)
+    rights_data = dict(target_user)
+    if action == "reset":
+        for key in list(rights_data.keys()):
+            if key.startswith('can_'): rights_data[key] = 0
+        rights_data['role'] = ROLE_STUDENT
+        rights_data['custom_role_name'] = None
+    elif action == "homework": rights_data['can_send_homework'] = 1 - rights_data['can_send_homework']
+    elif action == "notifications": rights_data['can_send_notifications'] = 1 - rights_data['can_send_notifications']
+    elif action == "global": rights_data['can_send_global_notifications'] = 1 - rights_data['can_send_global_notifications']
+    elif action == "del_homework": rights_data['can_delete_homework'] = 1 - rights_data['can_delete_homework']
+    elif action == "del_notifications": rights_data['can_delete_notifications'] = 1 - rights_data['can_delete_notifications']
+    elif action == "del_suggestions": rights_data['can_delete_suggestions'] = 1 - rights_data['can_delete_suggestions']
+    elif action == "manage_users": rights_data['can_manage_users'] = 1 - rights_data['can_manage_users']
+
+    update_user_rights(target_user_id, rights_data)
+    updated_user = get_user(target_user_id)
+    keyboard = [
+        [InlineKeyboardButton(f"{'✅' if updated_user['can_send_homework'] else '❌'} Отправка ДЗ", callback_data=f"toggle_homework_{target_user_id}")],
+        [InlineKeyboardButton(f"{'✅' if updated_user['can_send_notifications'] else '❌'} Отправка уведомлений", callback_data=f"toggle_notifications_{target_user_id}")],
+        [InlineKeyboardButton(f"{'✅' if updated_user['can_send_global_notifications'] else '❌'} Глобальные уведомления", callback_data=f"toggle_global_{target_user_id}")],
+        [InlineKeyboardButton(f"{'✅' if updated_user['can_delete_homework'] else '❌'} Удаление ДЗ", callback_data=f"toggle_del_homework_{target_user_id}")],
+        [InlineKeyboardButton(f"{'✅' if updated_user['can_delete_notifications'] else '❌'} Удаление уведомлений", callback_data=f"toggle_del_notifications_{target_user_id}")],
+        [InlineKeyboardButton(f"{'✅' if updated_user['can_delete_suggestions'] else '❌'} Удаление предложений", callback_data=f"toggle_del_suggestions_{target_user_id}")],
+        [InlineKeyboardButton(f"{'✅' if updated_user['can_manage_users'] else '❌'} Управление пользователями", callback_data=f"toggle_manage_users_{target_user_id}")],
+        [InlineKeyboardButton("🔙 Назад к списку", callback_data=f"rights_back_to_users_{context.user_data['rights_management_group']}")],
+        [InlineKeyboardButton("❌ Сбросить все права", callback_data=f"reset_rights_{target_user_id}")],
+        [InlineKeyboardButton("✅ Сохранить и выйти", callback_data="save_rights")]
+    ]
+    role_display = get_user_role_display(target_user_id)
+    await query.edit_message_text(f"👤 <b>Управление правами: {updated_user['first_name']}</b>\nГруппа: {updated_user['group_name']} | Роль: {role_display}\n\nНажмите на право для изменения:", parse_mode='HTML', reply_markup=InlineKeyboardMarkup(keyboard))
+    return AWAITING_USER_RIGHTS
+
+# -------------------- INITIALIZATION AND MAIN --------------------
+
+async def init_schedule_cache(application):
+    try:
+        global schedule_cache, last_schedule_check
+        data = fetch_schedule_data()
+        if data:
+            schedule_cache = data
+            last_schedule_check = datetime.now(YEKATERINBURG_TZ)
+            print("ЛОГ: Кэш расписания инициализирован")
+        fetch_groups_list()
+        fetch_teachers_list()
+    except Exception as e:
+        print(f"ОШИБКА при инициализации кэша расписания: {e}")
+
+def main():
+    """Main application launcher"""
+    try:
+        init_db()
+        app = Application.builder().token(BOT_TOKEN).post_init(init_schedule_cache).build()
+        
+        job_queue = app.job_queue
+        job_queue.run_repeating(check_schedule_changes, interval=3600, first=10)
+        job_queue.run_repeating(check_lesson_notifications, interval=60, first=10)
+        job_queue.run_daily(send_daily_schedule, time=time(hour=19, minute=0, tzinfo=YEKATERINBURG_TZ), days=(0, 1, 2, 3, 4, 5, 6))
+        job_queue.run_daily(send_morning_schedule, time=time(hour=7, minute=0, tzinfo=YEKATERINBURG_TZ), days=(0, 1, 2, 3, 4, 5, 6))
+        job_queue.run_daily(check_birthdays, time=time(hour=0, minute=0, tzinfo=YEKATERINBURG_TZ), days=(0, 1, 2, 3, 4, 5, 6))
+        
+        conv_handler = ConversationHandler(
+            entry_points=[
+                CommandHandler('start', start_command),
+                MessageHandler(filters.Regex('^📢 Отправить ДЗ$'), ask_homework_details),
+                MessageHandler(filters.Regex('^📢 Отправить уведомление$'), ask_notification_details),
+                MessageHandler(filters.Regex('^💡 Предложить идею$'), ask_suggestion_details),
+                MessageHandler(filters.Regex('^Удалить ДЗ$'), delete_homework_menu),
+                MessageHandler(filters.Regex('^Удалить уведомление$'), delete_notification_menu),
+                MessageHandler(filters.Regex('^Удалить предложения$'), delete_suggestions_menu),
+                MessageHandler(filters.Regex('^Удалить пользователя$'), delete_user_menu),
+                MessageHandler(filters.Regex('^🎓 Сменить группу$'), ask_user_group),
+                MessageHandler(filters.Regex('^🎂 Установить день рождения$'), ask_birthday_date),
+                MessageHandler(filters.Regex('^🌍 Отправить всем группам$'), ask_global_notification_details),
+                MessageHandler(filters.Regex('^👑 Назначить роль$'), start_role_assignment),
+                MessageHandler(filters.Regex('^🔧 Управление правами$'), manage_user_rights_menu),
+                MessageHandler(filters.Regex('^🔧 Настройки уведомлений$'), show_notification_settings),
+                MessageHandler(filters.Regex('^(👨‍🏫 Расписание преподавателей|Расписание преподавателей)$'), show_teachers_list),
+                MessageHandler(filters.Regex('^(👥 Расписание другой группы|Расписание другой группы)$'), show_other_groups_list),
+            ],
+            states={
+                AWAITING_GROUP: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_group_selection)],
+                AWAITING_HOMEWORK: [MessageHandler(filters.TEXT | filters.PHOTO | filters.VIDEO | filters.Document.ALL, handle_homework_input)],
+                AWAITING_INFO: [MessageHandler(filters.TEXT | filters.PHOTO | filters.VIDEO | filters.Document.ALL, handle_notification_input)],
+                AWAITING_SUGGESTION: [MessageHandler(filters.TEXT | filters.PHOTO | filters.VIDEO | filters.Document.ALL, handle_suggestion_input)],
+                AWAITING_SUGGESTION_RESPONSE: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_suggestion_response_input)],
+                AWAITING_BIRTHDAY: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_birthday_input)],
+                AWAITING_GLOBAL_NOTIFICATION: [MessageHandler(filters.TEXT | filters.PHOTO | filters.VIDEO | filters.Document.ALL, handle_global_notification_input)],
+                AWAITING_ROLE_ASSIGNMENT: [
+                    CallbackQueryHandler(handle_role_group_selection, pattern='^role_group_'),
+                    CallbackQueryHandler(handle_role_user_selection, pattern='^role_user_'),
+                    CallbackQueryHandler(handle_role_type_selection, pattern='^role_type_'),
+                    CallbackQueryHandler(handle_role_type_selection, pattern='^role_back_to_users_'),
+                    CallbackQueryHandler(handle_role_group_selection, pattern='^role_back_to_groups'),
+                    CallbackQueryHandler(handle_role_type_selection, pattern='^role_remove_'),
+                    CallbackQueryHandler(handle_role_type_selection, pattern='^custom_role$'),
+                    CallbackQueryHandler(handle_role_group_selection, pattern='^custom_role_global$'),
+                    CallbackQueryHandler(start_role_assignment, pattern='^role_cancel$'),
+                ],
+                AWAITING_CUSTOM_ROLE: [
+                    MessageHandler(filters.TEXT & ~filters.COMMAND, handle_custom_role_input)
+                ],
+                AWAITING_USER_RIGHTS: [
+                    CallbackQueryHandler(handle_user_rights_group_selection, pattern='^rights_group_'),
+                    CallbackQueryHandler(handle_user_rights_selection, pattern='^manage_rights_'),
+                    CallbackQueryHandler(handle_rights_toggle, pattern='^(toggle_|reset_|rights_back_|save_)'),
+                    CallbackQueryHandler(handle_user_rights_group_selection, pattern='^rights_back_to_users_'),
+                ],
+                AWAITING_NOTIFICATION_SETTINGS: [
+                    CallbackQueryHandler(handle_notification_settings_callback, pattern='^(toggle_|done_)')
+                ],
+                AWAITING_HOMEWORK_DELETE: [CallbackQueryHandler(handle_delete_callback, pattern='^del_hw_')],
+                AWAITING_INFO_DELETE: [CallbackQueryHandler(handle_delete_callback, pattern='^del_notif_')],
+                AWAITING_USER_DELETE: [CallbackQueryHandler(handle_delete_callback, pattern='^del_user_')],
+                AWAITING_SUGGESTION_DELETE: [CallbackQueryHandler(handle_delete_callback, pattern='^del_sugg_')],
+                AWAITING_TEACHER_SELECTION: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_teacher_selection)],
+                AWAITING_TEACHER_PERIOD: [MessageHandler(filters.Regex('^(📅 Сегодня|📅 Завтра|📅 Неделя|📅 Все расписание|🔙 Назад|Назад)$'), handle_teacher_period_selection)],
+                AWAITING_OTHER_GROUP_SELECTION: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_other_group_selection)],
+                AWAITING_OTHER_GROUP_PERIOD: [MessageHandler(filters.Regex('^(📅 Сегодня|📅 Завтра|📅 Неделя|📅 Все расписание|🔙 Назад|Назад)$'), handle_other_group_period_selection)],
+            },
+            fallbacks=[
+                CommandHandler('start', start_command),
+                MessageHandler(filters.Regex('^(❌ Отмена|🔙 Назад|Назад)$'), cancel_conversation),
+                CallbackQueryHandler(cancel_conversation, pattern='^role_cancel$')
+            ],
+            allow_reentry=True
+        )
+        
+        app.add_handler(conv_handler)
+        app.add_handler(CallbackQueryHandler(handle_suggestion_response_callback, pattern='^respond_'))
+        app.add_handler(CallbackQueryHandler(handle_show_users_callback, pattern='^show_users_'))
+        app.add_handler(CallbackQueryHandler(handle_back_to_groups, pattern='^back_to_groups$'))
+        app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_simple_message))
+        
+        print("ЛОГ: Бот запущен!")
+        app.run_polling()
+    except Exception as e:
+        print(f"КРИТИЧЕСКАЯ ОШИБКА: {e}")
+
+if __name__ == "__main__":
+    main()
