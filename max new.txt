@@ -1176,7 +1176,7 @@ def format_room_display(lesson):
 def format_subgroup_line(lesson):
     subgroup = lesson.get('subgroup', 0)
     if subgroup and subgroup != 0:
-        return f"\n    👥 Подгруппа: {subgroup}"
+        return f"    👥 Подгруппа: {subgroup}"
     return ""
 
 def find_merged_groups(current_lesson, all_parsed_lessons):
@@ -1220,13 +1220,16 @@ def format_schedule(lessons, title, all_parsed_lessons=None):
                         f"    ⏰ {start_time}-{end_time} | {lesson['number']} пара\n"
                         f"    📚 {lesson['subject']}\n"
                         f"    👨‍🏫 {lesson['teacher']}\n"
-                        f"    🚪 {format_room_display(lesson)}\n"
+                        f"    🚪 {format_room_display(lesson)}"
                     )
-                    lesson_text += format_subgroup_line(lesson)
+                    subgroup_part = format_subgroup_line(lesson)
+                    if subgroup_part:
+                        lesson_text += f"\n{subgroup_part}"
                     if all_parsed_lessons:
                         merged = find_merged_groups(lesson, all_parsed_lessons)
                         if merged:
-                            lesson_text += f"\n    👥 Совмещена с группой {', '.join(merged)}\n"
+                            lesson_text += f"\n    👥 Совмещена с группой {', '.join(merged)}"
+                    lesson_text += "\n"
                     result.append(lesson_text)
             except Exception as e:
                 log_error(f"Не удалось отформатировать пару: {e}")
@@ -1235,7 +1238,6 @@ def format_schedule(lessons, title, all_parsed_lessons=None):
         return "\n".join(result)
     except Exception as e:
         return f"❌ Ошибка при формировании расписания: {str(e)}"
-
 def format_teacher_schedule(lessons, title, teacher_name):
     try:
         if not lessons:
@@ -1261,9 +1263,12 @@ def format_teacher_schedule(lessons, title, teacher_name):
                         f"    📚 {lesson['subject']}\n"
                         f"    👨‍🏫 {lesson['teacher']}\n"
                         f"    🚪 {format_room_display(lesson)}\n"
-                        f"    👥 <b>{lesson['group']}</b>\n"
+                        f"    👥 <b>{lesson['group']}</b>"
                     )
-                    lesson_text += format_subgroup_line(lesson)
+                    subgroup_part = format_subgroup_line(lesson)
+                    if subgroup_part:
+                        lesson_text += f"\n{subgroup_part}"
+                    lesson_text += "\n"
                     result.append(lesson_text)
             except Exception as e:
                 log_error(f"Не удалось отформатировать пару: {e}")
@@ -3865,7 +3870,6 @@ def max_fetch_teachers_list():
         return max_teachers_cache
 
 def max_parse_lesson_data(lesson):
-def max_parse_lesson_data(lesson):
     if not isinstance(lesson, dict):
         return None
     try:
@@ -3922,7 +3926,7 @@ def max_format_room_display(lesson):
 def max_format_subgroup_line(lesson):
     subgroup = lesson.get('subgroup', 0)
     if subgroup and subgroup != 0:
-        return f"  👥 Подгруппа: {subgroup}\n"
+        return f"  👥 Подгруппа: {subgroup}"
     return ""
 
 def max_format_schedule(lessons, title):
@@ -3948,14 +3952,17 @@ def max_format_schedule(lessons, title):
         start_time = lesson.get('start_time', '❓')
         end_time = lesson.get('end_time', '❓')
 
-        subgroup_part = max_format_subgroup_line(lesson)
-        result.append(
+        lesson_text = (
             f"  {type_emoji} <b>{lesson['number']} пара</b> ({start_time}-{end_time})\n"
             f"  📖 {lesson['subject']}\n"
             f"  👨‍🏫 {lesson['teacher']}\n"
-            f"  🚪 {max_format_room_display(lesson)}\n"
-            f"{subgroup_part}"
+            f"  🚪 {max_format_room_display(lesson)}"
         )
+        subgroup_part = max_format_subgroup_line(lesson)
+        if subgroup_part:
+            lesson_text += f"\n{subgroup_part}"
+        lesson_text += "\n"
+        result.append(lesson_text)
 
     result.append(f"📊 Всего занятий: {len(lessons)}")
     return "\n".join(result)
@@ -3982,14 +3989,17 @@ def max_format_teacher_schedule(lessons, title, teacher_name):
         start_time = lesson.get('start_time', '❓')
         end_time = lesson.get('end_time', '❓')
 
-        subgroup_part = max_format_subgroup_line(lesson)
-        result.append(
+        lesson_text = (
             f"  {type_emoji} {lesson['number']} пара ({start_time}-{end_time})\n"
             f"  👥 Группа: <b>{lesson['group']}</b>\n"
             f"  📖 {lesson['subject']}\n"
-            f"  🚪 {max_format_room_display(lesson)}\n"
-            f"{subgroup_part}"
+            f"  🚪 {max_format_room_display(lesson)}"
         )
+        subgroup_part = max_format_subgroup_line(lesson)
+        if subgroup_part:
+            lesson_text += f"\n{subgroup_part}"
+        lesson_text += "\n"
+        result.append(lesson_text)
 
     result.append(f"📊 Всего занятий: {len(lessons)}")
     return "\n".join(result)
