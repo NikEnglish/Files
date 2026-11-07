@@ -999,7 +999,7 @@ def fetch_schedule_data():
         if GLOBAL_SCHEDULE_DATA and GLOBAL_SCHEDULE_TIME and (datetime.now(YEKATERINBURG_TZ) - GLOBAL_SCHEDULE_TIME).total_seconds() < 1800:
             return GLOBAL_SCHEDULE_DATA
         try:
-            url = "https://pmklink.ru/schedule/request.php?token=Uf40-ZZkp-t5Nv-ZD5v"
+            url = "https://staff.pmk-online.ru/json/schedule1c?token=5f096ca7305a8a76cc07e2eab4f6d2f05c8d682a8120ae3d13a3e522b3c9769a"
             headers = {
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
             }
