@@ -1081,9 +1081,9 @@ def parse_lesson_data(lesson):
             return None
         lesson_data = {}
         lesson_data['group'] = lesson.get('group', 'Не указана')
-        lesson_data['number'] = lesson.get('lessonNumber', 0)
-        lesson_data['type'] = lesson.get('lessonType', 'Занятие')
-        lesson_data['subject'] = lesson.get('subjectFull', 'Не указано')
+        lesson_data['number'] = lesson.get('lessonNumber') or lesson.get('number') or 0
+        lesson_data['type'] = lesson.get('lessonType') or lesson.get('type') or 'Занятие'
+        lesson_data['subject'] = lesson.get('subjectFull') or lesson.get('subject') or 'Не указано'
         lesson_data['campus'] = lesson.get('campus', 'Не указан')
         lesson_data['room'] = lesson.get('room', 'Не указана')
         lesson_data['teacher'] = lesson.get('teacher', 'Не указан')
@@ -3865,14 +3865,15 @@ def max_fetch_teachers_list():
         return max_teachers_cache
 
 def max_parse_lesson_data(lesson):
+def max_parse_lesson_data(lesson):
     if not isinstance(lesson, dict):
         return None
     try:
         item = {
             'group': lesson.get('group', 'Не указана'),
-            'number': lesson.get('lessonNumber', 0),
-            'type': lesson.get('lessonType', 'Занятие'),
-            'subject': lesson.get('subjectFull', 'Не указано'),
+            'number': lesson.get('lessonNumber') or lesson.get('number') or 0,
+            'type': lesson.get('lessonType') or lesson.get('type') or 'Занятие',
+            'subject': lesson.get('subjectFull') or lesson.get('subject') or 'Не указано',
             'campus': lesson.get('campus', 'Не указан'),
             'room': lesson.get('room', 'Не указана'),
             'teacher': lesson.get('teacher', 'Не указан'),
