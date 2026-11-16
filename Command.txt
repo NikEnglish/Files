@@ -1,0 +1,1 @@
+mkdir -p /storage/emulated/0/Download/BotBackup && cp /storage/emulated/0/.ColombiaMedia/bot_data.db /storage/emulated/0/Download/BotBackup/ && cp /storage/emulated/0/.ColombiaMedia/max_bot_users.db /storage/emulated/0/Download/BotBackup/ && cp /storage/emulated/0/.ColombiaMedia/newfile.py /storage/emulated/0/Download/BotBackup/
